@@ -1,0 +1,27 @@
+name: Update TradingView Watchlists
+
+on:
+  workflow_dispatch:
+
+jobs:
+  update-tv:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install packages
+        run: npm install playwright-core @browserbasehq/sdk
+
+      - name: Run Playwright
+        env:
+          BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
+          BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
+          TRADINGVIEW_STORAGE_STATE: ${{ secrets.TRADINGVIEW_STORAGE_STATE }}
+        run: node update-watchlist.js
