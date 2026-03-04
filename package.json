@@ -1,13 +1,20 @@
-{
-  "name": "tv-watchlist-updater",
-  "version": "1.0.0",
-  "private": true,
-  "type": "commonjs",
-"scripts": {
-  "update": "node src/update-watchlists.js"
-},
-  "dependencies": {
-    "@browserbasehq/sdk": "^2.0.0",
-    "playwright-core": "^1.48.0"
-  }
-}
+const { chromium } = require('playwright');
+
+(async () => {
+  const browser = await chromium.launch({ headless: false });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  await page.goto('https://www.tradingview.com/');
+
+  console.log('TradingView に手動でログインして、2FA も完了してください。');
+  console.log('ログイン後、Enter を押すと storageState を保存します。');
+
+  process.stdin.resume();
+  process.stdin.once('data', async () => {
+    await context.storageState({ path: 'storageState.json' });
+    console.log('storageState.json を保存しました。');
+    await browser.close();
+    process.exit(0);
+  });
+})();
