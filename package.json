@@ -1,0 +1,13 @@
+{
+  "name": "tv-watchlist-updater",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "update": "node update-watchlists.js"
+  },
+  "dependencies": {
+    "@browserbasehq/sdk": "^2.0.0",
+    "playwright-core": "^1.48.0"
+  }
+}
