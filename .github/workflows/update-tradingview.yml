@@ -1,6 +1,8 @@
-name: Update TradingView Watchlists
+name: Update TradingView Watchlists (Online)
 
 on:
+  schedule:
+    - cron: "0 2 * * *"  # 毎日 UTC 02:00 = JST 11:00
   workflow_dispatch:
 
 jobs:
@@ -14,14 +16,25 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
-      - name: Install packages
-        run: npm install playwright-core @browserbasehq/sdk
+      - name: Install
+        run: npm install
 
-      - name: Run Playwright
+      - name: Run updater
         env:
           BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
           BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
           TRADINGVIEW_STORAGE_STATE: ${{ secrets.TRADINGVIEW_STORAGE_STATE }}
-        run: node update-watchlist.js
+
+          WATCHLIST_1_URL: ${{ secrets.WATCHLIST_1_URL }}
+          WATCHLIST_2_URL: ${{ secrets.WATCHLIST_2_URL }}
+
+          WATCHLIST_1_NAME: ${{ vars.WATCHLIST_1_NAME }}
+          WATCHLIST_2_NAME: ${{ vars.WATCHLIST_2_NAME }}
+
+          DO_DELETE_ALERTS: "true"
+          DO_DELETE_WATCHLISTS: "true"
+          DO_IMPORT_WATCHLISTS: "true"
+          DO_CREATE_WATCHLIST_ALERT: "false"
+        run: npm run update
