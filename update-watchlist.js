@@ -1,4 +1,3 @@
-const fs = require('fs');
 const { chromium } = require('playwright-core');
 const { Browserbase } = require('@browserbasehq/sdk');
 
@@ -11,17 +10,20 @@ const { Browserbase } = require('@browserbasehq/sdk');
     projectId: process.env.BROWSERBASE_PROJECT_ID,
   });
 
-  const wsUrl = session.connectUrl;
-  const browser = await chromium.connectOverCDP(wsUrl);
+  const browser = await chromium.connectOverCDP(session.connectUrl);
 
   const storageState = JSON.parse(process.env.TRADINGVIEW_STORAGE_STATE);
   const context = await browser.newContext({ storageState });
   const page = await context.newPage();
 
-  await page.goto('https://www.tradingview.com/');
-  await page.waitForTimeout(5000);
+  await page.goto('https://www.tradingview.com/', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(8000);
 
-  console.log('TradingView を開きました');
+  console.log('TradingView をログイン済み状態で開こうとしました');
+
+  // ログイン済みかざっくり確認するためにURLとタイトルを出す
+  console.log('Current URL:', page.url());
+  console.log('Page title:', await page.title());
 
   await browser.close();
 })();
