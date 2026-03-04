@@ -4,7 +4,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "update": "node src/update-watchlists.js"
+    "update": "node update-watchlists.js"
   },
   "dependencies": {
     "@browserbasehq/sdk": "^2.0.0",
