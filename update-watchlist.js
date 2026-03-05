@@ -4,7 +4,7 @@ const { chromium } = require("playwright-core");
 const { Browserbase } = require("@browserbasehq/sdk");
 
 // ==============================
-// 環境変数
+// Environment Variables
 // ==============================
 const BROWSERBASE_API_KEY = process.env.BROWSERBASE_API_KEY;
 const BROWSERBASE_PROJECT_ID = process.env.BROWSERBASE_PROJECT_ID;
@@ -21,10 +21,6 @@ const DO_DELETE_WATCHLISTS = (process.env.DO_DELETE_WATCHLISTS || "false") === "
 const DO_IMPORT_WATCHLISTS = (process.env.DO_IMPORT_WATCHLISTS || "true") === "true";
 const DO_CREATE_WATCHLIST_ALERT = (process.env.DO_CREATE_WATCHLIST_ALERT || "false") === "true";
 
-const ALERT_NAME_PREFIX = process.env.ALERT_NAME_PREFIX || "AUTO_WL";
-const ALERT_WEBHOOK_URL = process.env.ALERT_WEBHOOK_URL || "";
-const ALERT_MESSAGE = process.env.ALERT_MESSAGE || "AUTO|{{ticker}}|{{interval}}";
-
 const NAV_TIMEOUT = 60000;
 const STEP_TIMEOUT = 30000;
 
@@ -32,6 +28,9 @@ const WORKDIR = path.resolve(process.cwd(), "tmp");
 const OUT1 = path.join(WORKDIR, "wl1.txt");
 const OUT2 = path.join(WORKDIR, "wl2.txt");
 
+// ==============================
+// Utility
+// ==============================
 function reqEnv(name, val) {
   if (!val) throw new Error(`Missing env: ${name}`);
 }
@@ -60,11 +59,16 @@ async function safeScreenshot(page, label) {
   }
 }
 
+async function isVisible(locator) {
+  return await locator.first().isVisible().catch(() => false);
+}
+
 async function safeClick(locator, options = {}) {
   try {
-    await locator.waitFor({ state: "visible", timeout: options.timeout || STEP_TIMEOUT });
-    await locator.scrollIntoViewIfNeeded().catch(() => {});
-    await locator.click(options);
+    const el = locator.first();
+    await el.waitFor({ state: "visible", timeout: options.timeout || STEP_TIMEOUT });
+    await el.scrollIntoViewIfNeeded().catch(() => {});
+    await el.click(options);
     return true;
   } catch (_) {
     return false;
@@ -73,52 +77,104 @@ async function safeClick(locator, options = {}) {
 
 async function clickFirstVisible(candidates, options = {}) {
   for (const locator of candidates) {
-    const ok = await safeClick(locator.first(), options);
+    const ok = await safeClick(locator, options);
     if (ok) return true;
   }
   return false;
 }
 
+// ==============================
+// TradingView UI Actions
+// ==============================
 async function openWatchlistPanel(page) {
   const candidates = [
     page.locator('button[aria-label="ウォッチリスト、詳細、ニュース"]'),
     page.locator('button[aria-label="Watchlist, details and news"]'),
-    page.locator('button[data-tooltip*="ウォッチリスト"]'),
-    page.locator('button[data-tooltip*="Watchlist"]'),
-    page.getByRole("button", { name: /ウォッチリスト|Watchlist/i }),
+    page.locator('button[data-tooltip="ウォッチリスト、詳細、ニュース"]'),
+    page.locator('button[data-tooltip="Watchlist, details and news"]'),
+    page.locator('button[data-name="base"][data-tooltip="ウォッチリスト、詳細、ニュース"]'),
+    page.locator('button[data-name="base"][data-tooltip="Watchlist, details and news"]'),
   ];
 
-  const ok = await clickFirstVisible(candidates, { timeout: STEP_TIMEOUT });
+  const ok = await clickFirstVisible(candidates, { timeout: 8000 });
   if (!ok) {
+    await safeScreenshot(page, "watchlist_panel_not_found");
     throw new Error("ウォッチリストパネルを開くボタンが見つかりませんでした");
   }
 
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(2000);
+}
+
+async function ensureWatchlistPanelOpen(page) {
+  const menuButton = page.locator('button[data-name="watchlists-button"]').first();
+  if (await menuButton.isVisible().catch(() => false)) {
+    return;
+  }
+
+  await openWatchlistPanel(page);
+  await page.waitForTimeout(2000);
+
+  const stillNotVisible = !(await menuButton.isVisible().catch(() => false));
+  if (stillNotVisible) {
+    await safeScreenshot(page, "watchlist_panel_open_but_menu_missing");
+  }
 }
 
 async function openWatchlistMenu(page) {
+  await ensureWatchlistPanelOpen(page);
+
   const candidates = [
     page.locator('button[data-name="watchlists-button"]'),
     page.locator('button[data-name="watchlists-button"][type="button"]'),
+    page.locator('[data-name="widgetbar-watchlist"] button[data-name="watchlists-button"]'),
   ];
 
-  const ok = await clickFirstVisible(candidates, { timeout: STEP_TIMEOUT });
+  const ok = await clickFirstVisible(candidates, { timeout: 8000 });
   if (!ok) {
+    await safeScreenshot(page, "watchlist_menu_not_found");
     throw new Error("ウォッチリストメニューボタンが見つかりませんでした");
   }
 
-  await page.waitForTimeout(700);
+  await page.waitForTimeout(1200);
 }
 
 async function clickUploadList(page) {
-  const item = page
-    .locator('div[data-role="menuitem"]')
-    .filter({ hasText: /リストをアップロード|Upload list/i })
-    .first();
+  const menuRootCandidates = [
+    page.locator('[data-name="active-watchlist-menu"]').first(),
+    page.locator('[data-qa-id="popup-menu-container"]').first(),
+    page.locator('[role="menu"]').first(),
+    page.locator('div[data-role="menu-inner"]').first(),
+  ];
 
-  await item.waitFor({ state: "visible", timeout: 10000 });
-  await item.scrollIntoViewIfNeeded().catch(() => {});
-  await item.click({ force: true });
+  let scopedRoot = page;
+  for (const root of menuRootCandidates) {
+    if (await root.isVisible().catch(() => false)) {
+      scopedRoot = root;
+      break;
+    }
+  }
+
+  const candidates = [
+    scopedRoot.locator('div[data-role="menuitem"]').filter({ hasText: "リストをアップロード…" }),
+    scopedRoot.locator('div[data-role="menuitem"]').filter({ hasText: "リストをアップロード..." }),
+    scopedRoot.locator('div[data-role="menuitem"]').filter({ hasText: /リストをアップロード/ }),
+    scopedRoot.locator('div[data-role="menuitem"]').filter({ hasText: /Upload list/i }),
+    scopedRoot.locator('div[data-role="menuitem"] span.label-jFqVJoPk').filter({ hasText: /リストをアップロード|Upload list/i }).locator(".."),
+  ];
+
+  for (const locator of candidates) {
+    const el = locator.first();
+    if (!(await el.isVisible().catch(() => false))) continue;
+    await el.scrollIntoViewIfNeeded().catch(() => {});
+    const clicked = await el.click({ timeout: 5000, force: true }).then(() => true).catch(() => false);
+    if (clicked) {
+      await page.waitForTimeout(1000);
+      return true;
+    }
+  }
+
+  await safeScreenshot(page, "upload_list_menuitem_not_found");
+  throw new Error("『リストをアップロード…』メニューが見つかりませんでした");
 }
 
 async function maybeRenameImportedList(page, desiredName) {
@@ -128,10 +184,12 @@ async function maybeRenameImportedList(page, desiredName) {
     page.locator('input[name*="name" i]'),
   ];
 
+  let filled = false;
   for (const loc of nameInputCandidates) {
     const el = loc.first();
     if (await el.isVisible().catch(() => false)) {
       await el.fill(desiredName).catch(() => {});
+      filled = true;
       break;
     }
   }
@@ -146,11 +204,14 @@ async function maybeRenameImportedList(page, desiredName) {
     page.locator('button:has-text("Save")'),
   ];
 
-  await clickFirstVisible(confirmCandidates, { timeout: 3000 }).catch(() => {});
+  const confirmed = await clickFirstVisible(confirmCandidates, { timeout: 3000 });
+  if (filled || confirmed) {
+    await page.waitForTimeout(1500);
+  }
 }
 
 async function importWatchlistFromFile(page, filePath, desiredName) {
-  await openWatchlistPanel(page);
+  await ensureWatchlistPanelOpen(page);
   await openWatchlistMenu(page);
 
   const [chooser] = await Promise.all([
@@ -159,24 +220,30 @@ async function importWatchlistFromFile(page, filePath, desiredName) {
   ]);
 
   await chooser.setFiles(filePath);
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(2500);
 
   await maybeRenameImportedList(page, desiredName);
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(2500);
 }
 
+// ==============================
+// Placeholder functions
+// ==============================
 async function deleteAllAlerts(page) {
-  console.log("DO_DELETE_ALERTS is true, but delete logic is currently simplified/off for stability.");
+  console.log("DO_DELETE_ALERTS is true, but delete logic is currently disabled for stability.");
 }
 
 async function deleteWatchlistByName(page, listName) {
-  console.log(`DO_DELETE_WATCHLISTS is true, but delete logic is currently simplified/off for stability. skip: ${listName}`);
+  console.log(`DO_DELETE_WATCHLISTS is true, but delete logic is currently disabled for stability. skip: ${listName}`);
 }
 
 async function createWatchlistAlertIfPossible(page, listName) {
   console.log(`DO_CREATE_WATCHLIST_ALERT is true, but create alert logic is currently disabled for stability. skip: ${listName}`);
 }
 
+// ==============================
+// Main
+// ==============================
 (async () => {
   let browser;
   let context;
@@ -243,15 +310,19 @@ async function createWatchlistAlertIfPossible(page, listName) {
 
     console.log("DONE.");
     await safeScreenshot(page, "done");
+
     await browser.close();
   } catch (err) {
     console.error("FAILED:", err?.message || err);
+
     if (page) {
       await safeScreenshot(page, "failed");
     }
+
     if (browser) {
       await browser.close().catch(() => {});
     }
+
     process.exit(1);
   }
 })();
