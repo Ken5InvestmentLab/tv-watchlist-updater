@@ -497,14 +497,25 @@ async function clickAddAlertToList(page) {
   const re = /リストにアラートを追加|Add alert to list/i;
 
   for (let i = 0; i < 16; i++) {
-    await page.waitForTimeout(900);
+    await page.waitForTimeout(1200);
 
     const opened = await openWatchlistMenuHard(page, 6);
     if (!opened) continue;
 
-    const item = await findMenuItemByText(page, re);
-    if (item) {
-      const ok = await clickBestEffort(item, 8000);
+    const itemCandidates = [
+      page.locator('[data-role="menuitem"]').filter({ hasText: re }).first(),
+      page.locator('tr[data-role="menuitem"]').filter({ hasText: re }).first(),
+      page.locator('button').filter({ hasText: re }).first(),
+      page.locator('span').filter({ hasText: re }).first(),
+      page.getByText(re).first(),
+    ];
+
+    for (const item of itemCandidates) {
+      const visible = await item.isVisible().catch(() => false);
+      if (!visible) continue;
+
+      await item.scrollIntoViewIfNeeded().catch(() => {});
+      const ok = await safeClick(item, { timeout: 8000, force: true });
       if (ok) {
         await page.waitForTimeout(1200);
         return true;
@@ -513,7 +524,6 @@ async function clickAddAlertToList(page) {
 
     console.log(`Add-alert menu not visible yet. retry=${i + 1}`);
     await closeAnyMenu(page);
-    await page.waitForTimeout(400);
   }
 
   await safeScreenshot(page, "click_add_alert_to_list_failed");
@@ -583,9 +593,16 @@ async function submitAlertDialog(page) {
 async function createWatchlistAlertIfPossible(page, listName) {
   console.log("Creating alert for:", listName);
 
+  // ①リスト切替
   await switchWatchlistTo(page, listName);
+
+  // 追加：切替直後のUI安定待ち
+  await page.waitForTimeout(4000);
+
+  // ②必ず “メニューを開いてから” 「リストにアラートを追加…」を探す
   await clickAddAlertToList(page);
 
+  // ③設定
   await selectAlertCondition(page, ALERT_CONDITION_NAME);
   await selectAlertResolution(page, ALERT_TIMEFRAME_LABEL);
   await selectAlertSymbolsList(page, listName);
