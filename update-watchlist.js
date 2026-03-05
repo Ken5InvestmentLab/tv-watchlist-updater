@@ -160,21 +160,18 @@ async function openWatchlistMenu(page) {
   await ensureWatchlistPanelOpen(page);
 
   const menuButton = page.locator('button[data-name="watchlists-button"]').first();
+  await menuButton.waitFor({ state: "visible", timeout: 8000 });
+  await menuButton.scrollIntoViewIfNeeded().catch(() => {});
 
-  const isOpened = await menuButton.evaluate((el) => {
-    return el.className.includes("isOpened");
-  }).catch(() => false);
+  const menuItem = page
+    .locator('div[data-role="menuitem"]')
+    .filter({ hasText: /リストを開く|リストをアップロード|リストにアラートを追加|Open list|Upload list|Add alert to list/i })
+    .first();
 
-  if (isOpened) {
-    return;
-  }
+  const alreadyVisible = await menuItem.isVisible().catch(() => false);
+  if (alreadyVisible) return;
 
-  const ok = await safeClick(menuButton, { timeout: 8000 });
-  if (!ok) {
-    await safeScreenshot(page, "watchlist_menu_not_found");
-    throw new Error("ウォッチリストメニューボタンが見つかりませんでした");
-  }
-
+  await menuButton.click({ force: true, timeout: 5000 });
   await page.waitForTimeout(1200);
 }
 
@@ -238,16 +235,15 @@ async function switchWatchlistTo(page, listName) {
   await row.scrollIntoViewIfNeeded().catch(() => {});
   await row.click({ timeout: 5000, force: true });
 
-  // いったん一覧を閉じる
+  // 一覧を閉じる
   await closeOpenListDialogIfVisible(page).catch(() => {});
   await page.keyboard.press("Escape").catch(() => {});
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(1500);
 
-  // タイトル反映確認
+  // タイトル反映待ち
   let current = "";
   let titleOk = false;
-
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 12; i++) {
     current = await getCurrentWatchlistTitle(page);
     if (current && current.includes(listName)) {
       titleOk = true;
@@ -261,37 +257,37 @@ async function switchWatchlistTo(page, listName) {
     throw new Error(`ウォッチリスト切替確認失敗: ${listName} / current=${current}`);
   }
 
-  // 重いリスト向け:
-  // 「リストにアラートを追加…」が見えるまで
-  // 1秒待つ → メニュー開き直す → 再確認 を繰り返す
-  let addAlertVisible = false;
-
+  // 「リストにアラートを追加…」が見えるまで、
+  // 毎回いったん閉じてからメニューを開き直す
   for (let attempt = 0; attempt < 8; attempt++) {
-    await page.waitForTimeout(1000);
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(500);
 
-    // 念のためメニューを開き直す
-    await openWatchlistMenu(page);
+    const menuButton = page.locator('button[data-name="watchlists-button"]').first();
+    await menuButton.waitFor({ state: "visible", timeout: 8000 });
+    await menuButton.scrollIntoViewIfNeeded().catch(() => {});
+    await menuButton.click({ force: true, timeout: 5000 });
+    await page.waitForTimeout(1500);
 
     const addAlertItem = page
       .locator('div[data-role="menuitem"]')
       .filter({ hasText: /リストにアラートを追加|Add alert to list/i })
       .first();
 
-    addAlertVisible = await addAlertItem.isVisible().catch(() => false);
-
-    if (addAlertVisible) {
+    const visible = await addAlertItem.isVisible().catch(() => false);
+    if (visible) {
       console.log(`Add-alert menu became visible after ${attempt + 1} attempt(s).`);
       return;
     }
 
-    // 開いたまま次ループに行くと不安定なことがあるので一度閉じる
-    await page.keyboard.press("Escape").catch(() => {});
-    await page.waitForTimeout(500);
+    console.log(`Add-alert menu not visible yet. retry=${attempt + 1}`);
+    await page.waitForTimeout(1000);
   }
 
   await safeScreenshot(page, `add_alert_menu_not_ready_${listName}`);
   throw new Error(`ウォッチリスト切替後に『リストにアラートを追加…』が表示されませんでした: ${listName}`);
 }
+
 async function deleteManagedWatchlistsByPrefix(page, prefix) {
   console.log(`Deleting watchlists with prefix: ${prefix}`);
 
