@@ -231,14 +231,30 @@ async function switchWatchlistTo(page, listName) {
   console.log("Switching watchlist to:", listName);
   await openListOpenDialog(page);
 
-  const title = page.locator("div.title-ODL8WA9K").filter({ hasText: new RegExp(`^${escapeRegex(listName)}$`) }).first();
-  const visible = await title.isVisible().catch(() => false);
-  if (!visible) {
-    await safeScreenshot(page, `watchlist_not_found_${listName}`);
-    throw new Error(`指定ウォッチリストが見つかりませんでした: ${listName}`);
+  const row = page
+    .locator('div[data-role="list-item"]')
+    .filter({ has: page.locator(`div.title-ODL8WA9K[data-overflow-tooltip-html="${listName}"]`) })
+    .first();
+
+  const rowVisible = await row.isVisible().catch(() => false);
+  if (!rowVisible) {
+    const fallbackRow = page
+      .locator(`div[data-role="list-item"][data-title="${listName}"]`)
+      .first();
+
+    const fallbackVisible = await fallbackRow.isVisible().catch(() => false);
+    if (!fallbackVisible) {
+      await safeScreenshot(page, `watchlist_not_found_${listName}`);
+      throw new Error(`指定ウォッチリストが見つかりませんでした: ${listName}`);
+    }
+
+    await fallbackRow.scrollIntoViewIfNeeded().catch(() => {});
+    await fallbackRow.click({ timeout: 5000, force: true });
+  } else {
+    await row.scrollIntoViewIfNeeded().catch(() => {});
+    await row.click({ timeout: 5000, force: true });
   }
 
-  await title.click({ timeout: 5000, force: true });
   await page.waitForTimeout(2000);
 
   const current = await getCurrentWatchlistTitle(page);
@@ -246,6 +262,10 @@ async function switchWatchlistTo(page, listName) {
     await safeScreenshot(page, `watchlist_switch_failed_${listName}`);
     throw new Error(`ウォッチリスト切替確認失敗: ${listName} / current=${current}`);
   }
+
+  await closeOpenListDialogIfVisible(page).catch(() => {});
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.waitForTimeout(700);
 }
 
 async function deleteManagedWatchlistsByPrefix(page, prefix) {
