@@ -237,7 +237,7 @@ async function switchWatchlistTo(page, listName) {
   await row.scrollIntoViewIfNeeded().catch(() => {});
   await row.click({ timeout: 5000, force: true });
 
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(6000);
 
   const current = await getCurrentWatchlistTitle(page);
   if (!current.includes(listName)) {
