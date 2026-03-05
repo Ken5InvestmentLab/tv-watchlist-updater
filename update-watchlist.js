@@ -591,15 +591,60 @@ async function selectAlertCondition(page, conditionName) {
 }
 
 async function selectAlertResolution(page, label) {
-  const open = page.locator('[data-qa-id="resolution-dropdown-item"]').first();
-  await safeClick(open, { timeout: 12000, force: true });
-  await page.waitForTimeout(600);
+  console.log("Selecting alert resolution:", label);
 
-  const opt = page.locator('[role="option"], [data-qa-id="resolution-dropdown-item"]').filter({ hasText: label }).first();
-  const ok = await safeClick(opt, { timeout: 20000, force: true });
-  if (!ok) {
+  // ① 「チャートと同一」または「Same as chart」のドロップダウンを開く
+  const dropdownCandidates = [
+    // ユーザー指示通り「チャートと同一」あるいは英語の「Same as chart」を直接狙う
+    page.locator('[role="button"], [role="combobox"]').filter({ hasText: /^チャートと同一$|^Same as chart$/ }).first(),
+    page.locator('span').filter({ hasText: /^チャートと同一$|^Same as chart$/ }).first(),
+    // 「Interval / 時間足」ラベルの横にあるボタンを狙う
+    page.getByText(/^Interval$|^時間足$/).locator('~ div').locator('[role="button"], [role="combobox"]').first(),
+    // 古いセレクタのフォールバック
+    page.locator('[data-qa-id="resolution-dropdown-item"]').first()
+  ];
+
+  let opened = false;
+  for (const c of dropdownCandidates) {
+    if (await c.isVisible().catch(() => false)) {
+      if (await safeClick(c, { timeout: 4000, force: true })) {
+        opened = true;
+        break;
+      }
+    }
+  }
+
+  if (!opened) {
+    // 見つからなかった場合は強引にテキストクリックを試みる
+    await clickBestEffort(page.getByText(/^チャートと同一$|^Same as chart$/).first(), 4000);
+  }
+  
+  await page.waitForTimeout(1000); // ドロップダウンが開くアニメーション待ち
+
+  // ② 時間足を選択する（日本語・英語両対応）
+  // 環境変数から来る "4 時間" に加え、英語UIの "4 hours" にもマッチするようにする
+  const re = new RegExp(`^${escapeRegex(label)}$|^4 hours$|^4 時間$`, "i");
+  console.log("Looking for resolution option matching:", re);
+
+  const optionCandidates = [
+    page.locator('[role="option"]').filter({ hasText: re }).first(),
+    page.locator('span').filter({ hasText: re }).first(),
+    page.locator('div').filter({ hasText: re }).last()
+  ];
+
+  let selected = false;
+  for (const opt of optionCandidates) {
+    if (await opt.isVisible().catch(() => false)) {
+      if (await safeClick(opt, { timeout: 5000, force: true })) {
+        selected = true;
+        break;
+      }
+    }
+  }
+
+  if (!selected) {
     await safeScreenshot(page, "alert_resolution_not_found");
-    throw new Error(`時間足が見つかりませんでした: ${label}`);
+    throw new Error(`時間足が見つかりませんでした: ${label} (検索用正規表現: ${re})`);
   }
   await page.waitForTimeout(600);
 }
