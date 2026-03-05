@@ -533,14 +533,59 @@ async function clickAddAlertToList(page) {
 }
 
 async function selectAlertCondition(page, conditionName) {
-  await safeClick(page.locator('[data-qa-id="main-series-select-title"]').first(), { timeout: 12000, force: true });
-  await page.waitForTimeout(800);
+  console.log("Selecting alert condition:", conditionName);
 
-  const option = page.locator('[role="option"]').filter({ hasText: conditionName }).first();
-  const ok = await safeClick(option, { timeout: 20000, force: true });
-  if (!ok) {
+  // ① 「条件（Condition）」のドロップダウンを開く
+  // 新UIではデフォルトで「Price」または「価格」が選択されているため、そのテキストを狙ってクリックする
+  const dropdownCandidates = [
+    page.locator('[data-qa-id="main-series-select-title"]').first(),
+    page.locator('span').filter({ hasText: /^Price$|^価格$/ }).first(),
+    page.locator('div').filter({ hasText: /^Price$|^価格$/ }).last(),
+    page.getByText(/^Condition$|^条件$/).locator('~ div').locator('[role="button"], [role="combobox"]').first()
+  ];
+
+  let opened = false;
+  for (const c of dropdownCandidates) {
+    if (await c.isVisible().catch(() => false)) {
+      if (await safeClick(c, { timeout: 4000, force: true })) {
+        opened = true;
+        break;
+      }
+    }
+  }
+
+  // 正規の候補で見つからなかった場合の強引なクリック
+  if (!opened) {
+    await clickBestEffort(page.getByText(/^Price$|^価格$/).first(), 4000);
+  }
+  
+  await page.waitForTimeout(1000); // ドロップダウンが開くアニメーション待ち
+
+  // ② リストからインジケーター（条件）を選択する
+  // パラメータ部分「(20, 2...)」などがUI上で省略・変形されることがあるため、名前の先頭部分で部分一致させる
+  const shortName = conditionName.split('(')[0].trim();
+  console.log("Looking for option matching:", shortName);
+
+  const optionCandidates = [
+    page.locator('[role="option"]').filter({ hasText: conditionName }).first(),
+    page.locator('[role="option"]').filter({ hasText: shortName }).first(),
+    page.locator('span').filter({ hasText: shortName }).first(),
+    page.getByText(shortName).first()
+  ];
+
+  let selected = false;
+  for (const opt of optionCandidates) {
+    if (await opt.isVisible().catch(() => false)) {
+      if (await safeClick(opt, { timeout: 5000, force: true })) {
+        selected = true;
+        break;
+      }
+    }
+  }
+
+  if (!selected) {
     await safeScreenshot(page, "alert_condition_not_found");
-    throw new Error(`アラート条件が見つかりませんでした: ${conditionName}`);
+    throw new Error(`アラート条件が見つかりませんでした: ${conditionName} (短縮検索: ${shortName})`);
   }
   await page.waitForTimeout(600);
 }
