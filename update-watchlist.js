@@ -183,15 +183,7 @@ async function openWatchlistMenuHard(page, retry = 8) {
       return true;
     }
 
-    const anyMenuLike = await firstVisible(
-      page.locator('[role="menu"], div[data-name="menu-inner"], div[class*="menu"]'),
-      20
-    );
-    if (anyMenuLike) {
-      console.log(`watchlist menu opened (generic detected). retry=${i + 1}`);
-      return true;
-    }
-
+    console.log(`watchlist menu not actually opened. retry=${i + 1}`);
     await page.waitForTimeout(600);
   }
 
@@ -502,20 +494,18 @@ async function clickAddAlertToList(page) {
     const opened = await openWatchlistMenuHard(page, 6);
     if (!opened) continue;
 
-    const itemCandidates = [
-      page.locator('[data-role="menuitem"]').filter({ hasText: re }).first(),
-      page.locator('tr[data-role="menuitem"]').filter({ hasText: re }).first(),
-      page.locator('button').filter({ hasText: re }).first(),
-      page.locator('span').filter({ hasText: re }).first(),
-      page.getByText(re).first(),
-    ];
+    const root = await getVisibleWatchlistMenuRoot(page);
+    if (!root) {
+      console.log(`Watchlist menu root not found. retry=${i + 1}`);
+      await closeAnyMenu(page);
+      continue;
+    }
 
-    for (const item of itemCandidates) {
-      const visible = await item.isVisible().catch(() => false);
-      if (!visible) continue;
+    const item = root.locator('[data-role="menuitem"]').filter({ hasText: re }).first();
+    const visible = await item.isVisible().catch(() => false);
 
-      await item.scrollIntoViewIfNeeded().catch(() => {});
-      const ok = await safeClick(item, { timeout: 8000, force: true });
+    if (visible) {
+      const ok = await clickBestEffort(item, 8000);
       if (ok) {
         await page.waitForTimeout(1200);
         return true;
