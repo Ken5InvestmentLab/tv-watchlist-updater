@@ -320,10 +320,38 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
   }
 }
 
+async function closeOpenListDialogIfVisible(page) {
+  const closeCandidates = [
+    page.locator('button[data-qa-id="close"]'),
+    page.locator('button[data-qa-id="close"]').filter({ hasText: /メニューを閉じる|Close menu/i }),
+  ];
+
+  for (const c of closeCandidates) {
+    const el = c.first();
+    const visible = await el.isVisible().catch(() => false);
+    if (!visible) continue;
+
+    const clicked = await safeClick(el, { timeout: 3000, force: true });
+    if (clicked) {
+      await page.waitForTimeout(700);
+      return true;
+    }
+  }
+
+  return false;
+}
+
 // ==============================
 // Import watchlist
 // ==============================
 async function clickUploadList(page) {
+  await closeOpenListDialogIfVisible(page).catch(() => {});
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.waitForTimeout(500);
+
+  await ensureWatchlistPanelOpen(page);
+  await openWatchlistMenu(page);
+
   const candidates = [
     page.locator('div[data-role="menuitem"]').filter({ hasText: "リストをアップロード…" }),
     page.locator('div[data-role="menuitem"]').filter({ hasText: "リストをアップロード..." }),
@@ -374,20 +402,41 @@ async function maybeRenameImportedList(page, desiredName) {
 }
 
 async function importWatchlistFromFile(page, filePath, desiredName) {
-  await ensureWatchlistPanelOpen(page);
-  await openWatchlistMenu(page);
-
   console.log("Uploading file:", filePath);
   console.log("File exists:", fs.existsSync(filePath));
   console.log("File size:", fs.statSync(filePath).size);
 
-  const [chooser] = await Promise.all([
-    page.waitForEvent("filechooser", { timeout: 10000 }),
-    clickUploadList(page),
-  ]);
+  await closeOpenListDialogIfVisible(page).catch(() => {});
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.waitForTimeout(500);
 
-  await chooser.setFiles(filePath);
-  console.log("setFiles done:", filePath);
+  await clickUploadList(page);
+
+  const fileInput = page.locator('input[type="file"]').first();
+  const hasInput = await fileInput.isVisible().catch(() => false);
+
+  if (hasInput) {
+    await fileInput.setInputFiles(filePath);
+    console.log("setInputFiles done:", filePath);
+  } else {
+    console.log("input[type=file] not visible, trying filechooser fallback...");
+
+    const chooserPromise = page.waitForEvent("filechooser", { timeout: 5000 }).catch(() => null);
+
+    await closeOpenListDialogIfVisible(page).catch(() => {});
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(300);
+    await clickUploadList(page);
+
+    const chooser = await chooserPromise;
+    if (!chooser) {
+      await safeScreenshot(page, "file_input_and_filechooser_not_found");
+      throw new Error("input[type=file] も filechooser も取得できませんでした");
+    }
+
+    await chooser.setFiles(filePath);
+    console.log("setFiles done:", filePath);
+  }
 
   await page.waitForTimeout(3000);
   await safeScreenshot(page, `after_setFiles_${desiredName}`);
