@@ -2,10 +2,13 @@
   "name": "tv-watchlist-updater",
   "version": "1.0.0",
   "private": true,
+  "type": "commonjs",
   "scripts": {
+    "save:state": "node scripts/save-storage-state.js",
     "update": "node update-watchlist.js"
   },
-  "dependencies": {
-    "playwright": "^1.52.0"
+  "dependencies": {},
+  "devDependencies": {
+    "playwright": "^1.46.0"
   }
 }
