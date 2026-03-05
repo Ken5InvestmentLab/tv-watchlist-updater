@@ -1,12 +1,12 @@
-name: Update TradingView Watchlists (Online)
+name: Update TradingView Watchlists
 
 on:
   schedule:
-    - cron: "0 2 * * *"  # 毎日 UTC 02:00 = JST 11:00
+    - cron: "30 0 * * *"
   workflow_dispatch:
 
 jobs:
-  update-tv:
+  update-watchlists:
     runs-on: ubuntu-latest
 
     steps:
@@ -18,28 +18,28 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install
+      - name: Install dependencies
         run: npm install
 
-      - - name: Run updater
-  run: npm run update
-  env:
-    BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
-    BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
-    TRADINGVIEW_STORAGE_STATE: ${{ secrets.TRADINGVIEW_STORAGE_STATE }}
-    WATCHLIST_1_URL: ${{ secrets.WATCHLIST_1_URL }}
-    WATCHLIST_2_URL: ${{ secrets.WATCHLIST_2_URL }}
-    WATCHLIST_1_NAME: ${{ vars.WATCHLIST_1_NAME }}
-    WATCHLIST_2_NAME: ${{ vars.WATCHLIST_2_NAME }}
-    DO_DELETE_ALERTS: "true"
-    DO_DELETE_WATCHLISTS: "true"
-    DO_IMPORT_WATCHLISTS: "true"
-    DO_CREATE_WATCHLIST_ALERT: "true"
+      - name: Run updater
+        run: npm run update
+        env:
+          BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
+          BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
+          TRADINGVIEW_STORAGE_STATE: ${{ secrets.TRADINGVIEW_STORAGE_STATE }}
+          WATCHLIST_1_URL: ${{ secrets.WATCHLIST_1_URL }}
+          WATCHLIST_2_URL: ${{ secrets.WATCHLIST_2_URL }}
+          WATCHLIST_1_NAME: ${{ vars.WATCHLIST_1_NAME }}
+          WATCHLIST_2_NAME: ${{ vars.WATCHLIST_2_NAME }}
+          DO_DELETE_ALERTS: "true"
+          DO_DELETE_WATCHLISTS: "true"
+          DO_IMPORT_WATCHLISTS: "true"
+          DO_CREATE_WATCHLIST_ALERT: "true"
 
-- name: Upload debug screenshots
-  if: always()
-  uses: actions/upload-artifact@v4
-  with:
-    name: debug-screenshots
-    path: tmp/*.png
-    if-no-files-found: ignore
+      - name: Upload debug screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: tmp/*.png
+          if-no-files-found: ignore
