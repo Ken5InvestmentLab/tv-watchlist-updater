@@ -48,17 +48,17 @@ jobs:
           if-no-files-found: ignore
 
       - name: Notify Discord on Failure
-        if: failure()  # 失敗した時だけ実行
+        if: failure()
         run: |
           curl -H "Content-Type: application/json" \
                -X POST \
                -d '{
-                 "username": "TradingView Bot",
-                 "content": "⚠️ **Watchlist Update Failed!**",
+                 "username": "TradingView Alert",
+                 "content": "🔴 **[System] Browser Automation Error**",
                  "embeds": [{
-                   "title": "GitHub Actions Error Log",
+                   "title": "Playwright Error Log",
                    "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-                   "description": "トレビューの自動更新でエラーが発生しました。UIが変更された可能性があります。",
+                   "description": "TradingViewの操作中にエラーが発生しました。UIが変更された可能性があります。",
                    "color": 16711680
                  }]
-               }' ${{ secrets.DISCORD_WEBHOOK }}        
+               }' ${{ secrets.DISCORD_WEBHOOK }}
