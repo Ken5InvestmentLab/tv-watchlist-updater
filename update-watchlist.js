@@ -390,10 +390,18 @@ async function maybeRenameImportedList(page, desiredName) {
   }
 }
 
+function makeUploadCopyWithDesiredName(srcPath, desiredName) {
+  const dstPath = path.join(WORKDIR, `${desiredName}.txt`);
+  fs.copyFileSync(srcPath, dstPath);
+  return dstPath;
+}
+
 async function importWatchlistFromFile(page, filePath, desiredName) {
-  console.log("Uploading file:", filePath);
-  console.log("File exists:", fs.existsSync(filePath));
-  console.log("File size:", fs.statSync(filePath).size);
+  const uploadPath = makeUploadCopyWithDesiredName(filePath, desiredName);
+
+  console.log("Uploading file:", uploadPath);
+  console.log("File exists:", fs.existsSync(uploadPath));
+  console.log("File size:", fs.statSync(uploadPath).size);
 
   await closeOpenListDialogIfVisible(page).catch(() => {});
   await page.waitForTimeout(300);
@@ -402,19 +410,24 @@ async function importWatchlistFromFile(page, filePath, desiredName) {
   await openWatchlistMenu(page);
 
   const chooserPromise = page.waitForEvent("filechooser", { timeout: 8000 }).catch(() => null);
-  const inputPromise = page.locator('input[type="file"]').first().waitFor({ state: "attached", timeout: 8000 }).then(() => true).catch(() => false);
+  const inputPromise = page
+    .locator('input[type="file"]')
+    .first()
+    .waitFor({ state: "attached", timeout: 8000 })
+    .then(() => true)
+    .catch(() => false);
 
   await clickUploadList(page);
 
   const [chooser, hasInput] = await Promise.all([chooserPromise, inputPromise]);
 
   if (chooser) {
-    await chooser.setFiles(filePath);
-    console.log("setFiles done:", filePath);
+    await chooser.setFiles(uploadPath);
+    console.log("setFiles done:", uploadPath);
   } else if (hasInput) {
     const input = page.locator('input[type="file"]').first();
-    await input.setInputFiles(filePath);
-    console.log("setInputFiles done:", filePath);
+    await input.setInputFiles(uploadPath);
+    console.log("setInputFiles done:", uploadPath);
   } else {
     await safeScreenshot(page, "file_input_and_filechooser_not_found");
     throw new Error("input[type=file] も filechooser も取得できませんでした");
