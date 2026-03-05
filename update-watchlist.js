@@ -166,7 +166,7 @@ async function getVisibleWatchlistMenuRoot(page) {
 
 async function openWatchlistMenuHard(page, retry = 8) {
   await ensureWatchlistPanelOpen(page);
-  const btn = page.locator('button[data-name="watchlists-button"]').first();
+  const btn = page.locator('button[data-name="watchlists-button"] .arrow-merBkM5y').first();
 
   for (let i = 0; i < retry; i++) {
     await closeAnyMenu(page);
