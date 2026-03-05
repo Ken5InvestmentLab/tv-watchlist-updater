@@ -345,9 +345,6 @@ async function closeOpenListDialogIfVisible(page) {
 // Import watchlist
 // ==============================
 async function clickUploadList(page) {
-  await ensureWatchlistPanelOpen(page);
-  await openWatchlistMenu(page);
-
   const candidates = [
     page.locator('div[data-role="menuitem"]').filter({ hasText: "リストをアップロード…" }),
     page.locator('div[data-role="menuitem"]').filter({ hasText: "リストをアップロード..." }),
