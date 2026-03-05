@@ -358,7 +358,7 @@ async function clickUploadList(page) {
     throw new Error("『リストをアップロード…』メニューが見つかりませんでした");
   }
 
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(500);
 }
 
 async function maybeRenameImportedList(page, desiredName) {
@@ -399,26 +399,34 @@ async function importWatchlistFromFile(page, filePath, desiredName) {
   console.log("File exists:", fs.existsSync(filePath));
   console.log("File size:", fs.statSync(filePath).size);
 
-  // 削除後に一覧が残っていたら閉じる
   await closeOpenListDialogIfVisible(page).catch(() => {});
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(300);
 
   await ensureWatchlistPanelOpen(page);
   await openWatchlistMenu(page);
 
-  const [chooser] = await Promise.all([
-    page.waitForEvent("filechooser", { timeout: 10000 }),
-    clickUploadList(page),
-  ]);
+  // まず「アップロード…」をクリック（ここで input がDOMに出る or filechooser が出る）
+  const chooserPromise = page.waitForEvent("filechooser", { timeout: 8000 }).catch(() => null);
+  await clickUploadList(page);
 
-  await chooser.setFiles(filePath);
-  console.log("setFiles done:", filePath);
+  // filechooser が来たらそれを使う
+  const chooser = await chooserPromise;
+  if (chooser) {
+    await chooser.setFiles(filePath);
+    console.log("setFiles done:", filePath);
+  } else {
+    // filechooser が来ないタイプ → hidden input を待って setInputFiles
+    const input = page.locator('input[type="file"]').first();
+    await input.waitFor({ state: "attached", timeout: 8000 });
+    await input.setInputFiles(filePath);
+    console.log("setInputFiles done:", filePath);
+  }
 
-  await page.waitForTimeout(3000);
-  await safeScreenshot(page, `after_setFiles_${desiredName}`);
+  await page.waitForTimeout(2500);
+  await safeScreenshot(page, `after_upload_${desiredName}`);
 
   await maybeRenameImportedList(page, desiredName);
-  await page.waitForTimeout(2500);
+  await page.waitForTimeout(1500);
 }
 
 // ==============================
