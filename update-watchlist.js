@@ -159,13 +159,17 @@ async function ensureWatchlistPanelOpen(page) {
 async function openWatchlistMenu(page) {
   await ensureWatchlistPanelOpen(page);
 
-  const candidates = [
-    page.locator('button[data-name="watchlists-button"]'),
-    page.locator('button[data-name="watchlists-button"][type="button"]'),
-    page.locator('[data-name="widgetbar-watchlist"] button[data-name="watchlists-button"]'),
-  ];
+  const menuButton = page.locator('button[data-name="watchlists-button"]').first();
 
-  const ok = await clickFirstVisible(candidates, { timeout: 8000 });
+  const isOpened = await menuButton.evaluate((el) => {
+    return el.className.includes("isOpened");
+  }).catch(() => false);
+
+  if (isOpened) {
+    return;
+  }
+
+  const ok = await safeClick(menuButton, { timeout: 8000 });
   if (!ok) {
     await safeScreenshot(page, "watchlist_menu_not_found");
     throw new Error("ウォッチリストメニューボタンが見つかりませんでした");
@@ -537,7 +541,18 @@ async function deleteManagedAlerts(page, prefixes) {
 
 async function clickAddAlertToList(page) {
   await openWatchlistMenu(page);
-  await clickMenuItem(page, /リストにアラートを追加|Add alert to list/i);
+
+  const item = page
+    .locator('div[data-role="menuitem"]')
+    .filter({ hasText: /リストにアラートを追加|Add alert to list/i })
+    .first();
+
+  await item.waitFor({ state: "visible", timeout: 8000 });
+  await item.scrollIntoViewIfNeeded().catch(() => {});
+  await item.hover().catch(() => {});
+  await page.waitForTimeout(200);
+  await item.click({ force: true, timeout: 5000 });
+  await page.waitForTimeout(1200);
 }
 
 async function selectAlertCondition(page, conditionName) {
