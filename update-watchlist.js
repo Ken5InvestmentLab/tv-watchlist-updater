@@ -345,20 +345,16 @@ async function closeOpenListDialogIfVisible(page) {
 // Import watchlist
 // ==============================
 async function clickUploadList(page) {
-  const candidates = [
-    page.locator('div[data-role="menuitem"]').filter({ hasText: "リストをアップロード…" }),
-    page.locator('div[data-role="menuitem"]').filter({ hasText: "リストをアップロード..." }),
-    page.locator('div[data-role="menuitem"]').filter({ hasText: /リストをアップロード/ }),
-    page.locator('div[data-role="menuitem"]').filter({ hasText: /Upload list/i }),
-  ];
+  const item = page
+    .locator('div[data-role="menuitem"]')
+    .filter({ hasText: /リストをアップロード|Upload list/i })
+    .first();
 
-  const ok = await clickFirstVisible(candidates, { timeout: 5000, force: true });
-  if (!ok) {
-    await safeScreenshot(page, "upload_list_menuitem_not_found");
-    throw new Error("『リストをアップロード…』メニューが見つかりませんでした");
-  }
+  await item.waitFor({ state: "visible", timeout: 8000 });
+  await item.scrollIntoViewIfNeeded().catch(() => {});
+  await item.click({ force: true, timeout: 5000 });
 
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(1000);
 }
 
 async function maybeRenameImportedList(page, desiredName) {
@@ -405,21 +401,23 @@ async function importWatchlistFromFile(page, filePath, desiredName) {
   await ensureWatchlistPanelOpen(page);
   await openWatchlistMenu(page);
 
-  // まず「アップロード…」をクリック（ここで input がDOMに出る or filechooser が出る）
   const chooserPromise = page.waitForEvent("filechooser", { timeout: 8000 }).catch(() => null);
+  const inputPromise = page.locator('input[type="file"]').first().waitFor({ state: "attached", timeout: 8000 }).then(() => true).catch(() => false);
+
   await clickUploadList(page);
 
-  // filechooser が来たらそれを使う
-  const chooser = await chooserPromise;
+  const [chooser, hasInput] = await Promise.all([chooserPromise, inputPromise]);
+
   if (chooser) {
     await chooser.setFiles(filePath);
     console.log("setFiles done:", filePath);
-  } else {
-    // filechooser が来ないタイプ → hidden input を待って setInputFiles
+  } else if (hasInput) {
     const input = page.locator('input[type="file"]').first();
-    await input.waitFor({ state: "attached", timeout: 8000 });
     await input.setInputFiles(filePath);
     console.log("setInputFiles done:", filePath);
+  } else {
+    await safeScreenshot(page, "file_input_and_filechooser_not_found");
+    throw new Error("input[type=file] も filechooser も取得できませんでした");
   }
 
   await page.waitForTimeout(2500);
