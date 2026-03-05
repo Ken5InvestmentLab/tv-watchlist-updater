@@ -151,10 +151,12 @@ async function closeAnyMenu(page) {
 }
 
 async function getVisibleWatchlistMenuRoot(page) {
+  // 正規表現を少し緩くして、表記揺れに対応
+  const re = /リストに(高度な)?アラートを追加|リストを開く|リストをアップロード|Open list|Upload list|Add( advanced)? alert/i;
   const roots = [
-    page.locator('[role="menu"]').filter({ hasText: /リストにアラートを追加|リストを開く|リストをアップロード|Open list|Upload list|Add alert to list/i }),
-    page.locator('div[data-name="menu-inner"]').filter({ hasText: /リストにアラートを追加|リストを開く|リストをアップロード|Open list|Upload list|Add alert to list/i }),
-    page.locator('div[class*="menu"]').filter({ hasText: /リストにアラートを追加|リストを開く|リストをアップロード|Open list|Upload list|Add alert to list/i }),
+    page.locator('[role="menu"]').filter({ hasText: re }),
+    page.locator('div[data-name="menu-inner"]').filter({ hasText: re }),
+    page.locator('div[class*="menu"]').filter({ hasText: re }),
   ];
 
   for (const root of roots) {
@@ -486,7 +488,8 @@ async function deleteManagedAlerts(page, prefixes) {
 }
 
 async function clickAddAlertToList(page) {
-  const re = /リストにアラートを追加|Add alert to list/i;
+  // "Add advanced alert to list" のような最近の表記変更にも対応
+  const re = /リストに(高度な)?アラートを追加|Add( advanced)? alert( to list)?|アラートを追加/i;
 
   for (let i = 0; i < 16; i++) {
     await page.waitForTimeout(1200);
@@ -494,18 +497,27 @@ async function clickAddAlertToList(page) {
     const opened = await openWatchlistMenuHard(page, 6);
     if (!opened) continue;
 
-    const root = await getVisibleWatchlistMenuRoot(page);
-    if (!root) {
-      console.log(`Watchlist menu root not found. retry=${i + 1}`);
-      await closeAnyMenu(page);
-      continue;
-    }
+    // 候補を大幅に増やして、どれかに引っかかるようにする
+    const itemCandidates = [
+      page.getByRole('menuitem', { name: re }).first(),
+      page.locator('[role="menuitem"]').filter({ hasText: re }).first(),
+      page.locator('[data-role="menuitem"]').filter({ hasText: re }).first(),
+      page.locator('tr[data-role="menuitem"]').filter({ hasText: re }).first(),
+      page.locator('div[data-role="menuitem"]').filter({ hasText: re }).first(),
+      page.locator('div[class*="item"]').filter({ hasText: re }).first(),
+      page.locator('button').filter({ hasText: re }).first(),
+      page.locator('span').filter({ hasText: re }).first(),
+      page.getByText(re).first(),
+    ];
 
-    const item = root.locator('[data-role="menuitem"]').filter({ hasText: re }).first();
-    const visible = await item.isVisible().catch(() => false);
+    for (const item of itemCandidates) {
+      const visible = await item.isVisible().catch(() => false);
+      if (!visible) continue;
 
-    if (visible) {
-      const ok = await clickBestEffort(item, 8000);
+      await item.scrollIntoViewIfNeeded().catch(() => {});
+      
+      // safeClick ではなく、すでにあるより強力な clickBestEffort を使う
+      const ok = await clickBestEffort(item, 8000); 
       if (ok) {
         await page.waitForTimeout(1200);
         return true;
