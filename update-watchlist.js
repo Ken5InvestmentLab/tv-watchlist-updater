@@ -216,71 +216,6 @@ async function getOpenListRows(page) {
   return page.locator('div.title-ODL8WA9K');
 }
 
-async function deleteManagedAlerts(page, prefixes) {
-  await openAlertsPanel(page);
-
-  for (let round = 0; round < 100; round++) {
-    const tickerItems = page.locator('[data-name="alert-item-ticker"]');
-    const count = await tickerItems.count().catch(() => 0);
-
-    let targetTicker = null;
-    let targetText = "";
-
-    for (let i = 0; i < count; i++) {
-      const txt = (await tickerItems.nth(i).textContent().catch(() => "")).trim();
-      if (!txt) continue;
-
-      const matched = prefixes.some((p) => txt.startsWith(`${p}_`) || txt.startsWith(`${p},`) || txt === p);
-      if (matched) {
-        targetTicker = tickerItems.nth(i);
-        targetText = txt;
-        break;
-      }
-    }
-
-    if (!targetTicker) {
-      console.log("No more managed alerts.");
-      break;
-    }
-
-    console.log("Deleting alert:", targetText);
-
-    await targetTicker.scrollIntoViewIfNeeded().catch(() => {});
-    await targetTicker.click({ button: "right", timeout: 5000 }).catch(async () => {
-      await targetTicker.hover().catch(() => {});
-      await page.waitForTimeout(500);
-      await targetTicker.click({ button: "right", force: true, timeout: 5000 });
-    });
-
-    await page.waitForTimeout(800);
-
-    const deleteMenuCandidates = [
-      page.locator('tr[data-role="menuitem"]').filter({ hasText: /^削除$|Delete/ }),
-      page.locator('tr[data-role="menuitem"] [data-label="true"]').filter({ hasText: /^削除$|Delete/ }).locator("xpath=ancestor::tr[1]"),
-      page.locator('[data-role="menuitem"]').filter({ hasText: /^削除$|Delete/ }),
-    ];
-
-    const deleted = await clickFirstVisible(deleteMenuCandidates, { timeout: 5000, force: true });
-    if (!deleted) {
-      await safeScreenshot(page, "alert_delete_context_menu_not_found");
-      throw new Error(`アラート右クリックメニューの『削除』が見つかりませんでした: ${targetText}`);
-    }
-
-    await page.waitForTimeout(1000);
-
-    const confirmCandidates = [
-      page.getByRole("button", { name: /削除|Delete|OK|はい|Yes/i }),
-      page.locator('button:has-text("削除")'),
-      page.locator('button:has-text("Delete")'),
-      page.locator('button:has-text("OK")'),
-      page.locator('button:has-text("はい")'),
-    ];
-
-    await clickFirstVisible(confirmCandidates, { timeout: 5000, force: true });
-    await page.waitForTimeout(1500);
-  }
-}
-
 async function switchWatchlistTo(page, listName) {
   console.log("Switching watchlist to:", listName);
   await openListOpenDialog(page);
@@ -299,6 +234,77 @@ async function switchWatchlistTo(page, listName) {
   if (!current.includes(listName)) {
     await safeScreenshot(page, `watchlist_switch_failed_${listName}`);
     throw new Error(`ウォッチリスト切替確認失敗: ${listName} / current=${current}`);
+  }
+}
+
+async function deleteManagedWatchlistsByPrefix(page, prefix) {
+  console.log(`Deleting watchlists with prefix: ${prefix}`);
+
+  for (let round = 0; round < 50; round++) {
+    await openListOpenDialog(page);
+
+    const titles = page.locator("div.title-ODL8WA9K");
+    const count = await titles.count().catch(() => 0);
+
+    let targetIndex = -1;
+    let targetName = "";
+
+    for (let i = 0; i < count; i++) {
+      const text = (await titles.nth(i).textContent().catch(() => "")).trim();
+      if (!isManagedListName(text, prefix)) continue;
+      targetIndex = i;
+      targetName = text;
+      break;
+    }
+
+    if (targetIndex === -1) {
+      console.log(`No more managed watchlists for prefix: ${prefix}`);
+      await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(500);
+      break;
+    }
+
+    console.log(`Deleting watchlist: ${targetName}`);
+
+    const title = titles.nth(targetIndex);
+    await title.scrollIntoViewIfNeeded().catch(() => {});
+    await title.hover().catch(() => {});
+    await page.waitForTimeout(500);
+
+    const row = title.locator("xpath=ancestor::*[self::div][1]");
+    const deleteCandidates = [
+      row.locator('[data-role="list-item-action"][data-name="remove-button"]'),
+      row.locator('[data-name="remove-button"]'),
+      row.locator('[aria-label="削除"]'),
+      page.locator('[data-role="list-item-action"][data-name="remove-button"]').nth(targetIndex),
+    ];
+
+    let deleted = false;
+    for (const btn of deleteCandidates) {
+      const ok = await safeClick(btn, { timeout: 5000, force: true });
+      if (ok) {
+        deleted = true;
+        break;
+      }
+    }
+
+    if (!deleted) {
+      await safeScreenshot(page, `watchlist_delete_button_not_found_${prefix}`);
+      throw new Error(`ウォッチリスト削除ボタンが見つかりませんでした: ${targetName}`);
+    }
+
+    await page.waitForTimeout(1000);
+
+    const confirmCandidates = [
+      page.getByRole("button", { name: /削除|Delete|OK|はい|Yes/i }),
+      page.locator('button:has-text("削除")'),
+      page.locator('button:has-text("Delete")'),
+      page.locator('button:has-text("OK")'),
+      page.locator('button:has-text("はい")'),
+    ];
+
+    await clickFirstVisible(confirmCandidates, { timeout: 5000, force: true });
+    await page.waitForTimeout(1500);
   }
 }
 
@@ -406,56 +412,56 @@ async function deleteManagedAlerts(page, prefixes) {
     const tickerItems = page.locator('[data-name="alert-item-ticker"]');
     const count = await tickerItems.count().catch(() => 0);
 
-    let targetIndex = -1;
+    let targetTicker = null;
     let targetText = "";
 
     for (let i = 0; i < count; i++) {
       const txt = (await tickerItems.nth(i).textContent().catch(() => "")).trim();
       if (!txt) continue;
 
-      const matched = prefixes.some((p) => txt.startsWith(`${p}_`) || txt.startsWith(`${p},`) || txt === p);
+      const matched = prefixes.some(
+        (p) => txt.startsWith(`${p}_`) || txt.startsWith(`${p},`) || txt === p
+      );
       if (matched) {
-        targetIndex = i;
+        targetTicker = tickerItems.nth(i);
         targetText = txt;
         break;
       }
     }
 
-    if (targetIndex === -1) {
+    if (!targetTicker) {
       console.log("No more managed alerts.");
       break;
     }
 
     console.log("Deleting alert:", targetText);
 
-    const ticker = tickerItems.nth(targetIndex);
-    const row = ticker.locator("xpath=ancestor::*[self::div or self::span][1]");
-    const removeCandidates = [
-      row.locator('[data-name="remove-button"]'),
-      row.locator('[aria-label="削除"]'),
-      row.locator('button[aria-label="削除"]'),
-      page.locator('[data-name="remove-button"]').nth(targetIndex),
+    await targetTicker.scrollIntoViewIfNeeded().catch(() => {});
+    await targetTicker.click({ button: "right", timeout: 5000 }).catch(async () => {
+      await targetTicker.hover().catch(() => {});
+      await page.waitForTimeout(500);
+      await targetTicker.click({ button: "right", force: true, timeout: 5000 });
+    });
+
+    await page.waitForTimeout(800);
+
+    const deleteMenuCandidates = [
+      page.locator('tr[data-role="menuitem"]').filter({ hasText: /^削除$|Delete/ }),
+      page
+        .locator('tr[data-role="menuitem"] [data-label="true"]')
+        .filter({ hasText: /^削除$|Delete/ })
+        .locator("xpath=ancestor::tr[1]"),
+      page.locator('[data-role="menuitem"]').filter({ hasText: /^削除$|Delete/ }),
     ];
 
-    let removed = false;
-    for (const c of removeCandidates) {
-      const ok = await safeClick(c, { timeout: 5000, force: true });
-      if (ok) {
-        removed = true;
-        break;
-      }
-    }
+    const deleted = await clickFirstVisible(deleteMenuCandidates, {
+      timeout: 5000,
+      force: true,
+    });
 
-    if (!removed) {
-      await ticker.hover().catch(() => {});
-      await page.waitForTimeout(500);
-      const fallback = row.locator('[data-name="remove-button"]').first();
-      removed = await safeClick(fallback, { timeout: 5000, force: true });
-    }
-
-    if (!removed) {
-      await safeScreenshot(page, "alert_remove_button_not_found");
-      throw new Error(`アラート削除ボタンが見つかりませんでした: ${targetText}`);
+    if (!deleted) {
+      await safeScreenshot(page, "alert_delete_context_menu_not_found");
+      throw new Error(`アラート右クリックメニューの『削除』が見つかりませんでした: ${targetText}`);
     }
 
     await page.waitForTimeout(1000);
@@ -465,10 +471,11 @@ async function deleteManagedAlerts(page, prefixes) {
       page.locator('button:has-text("削除")'),
       page.locator('button:has-text("Delete")'),
       page.locator('button:has-text("OK")'),
+      page.locator('button:has-text("はい")'),
     ];
 
     await clickFirstVisible(confirmCandidates, { timeout: 5000, force: true });
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(1500);
   }
 }
 
