@@ -1,48 +1,48 @@
-name: Update TradingView Watchlists
+name: TV Watchlist Update (Playwright)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 0 * * 1-5"
+    - cron: "30 0 * * *"  # JST 09:30
 
 jobs:
-  update:
+  run:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install dependencies
-        run: npm install
-
-      - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+      - name: Install deps
+        run: |
+          npm ci || npm i
+          npx playwright install --with-deps
 
       - name: Run updater
         env:
           TRADINGVIEW_STORAGE_STATE: ${{ secrets.TRADINGVIEW_STORAGE_STATE }}
           WATCHLIST_1_URL: ${{ secrets.WATCHLIST_1_URL }}
           WATCHLIST_2_URL: ${{ secrets.WATCHLIST_2_URL }}
-          WATCHLIST_1_NAME: wl1
-          WATCHLIST_2_NAME: wl2
+          WATCHLIST_1_NAME: ${{ vars.WATCHLIST_1_NAME }}
+          WATCHLIST_2_NAME: ${{ vars.WATCHLIST_2_NAME }}
+
           DO_DELETE_ALERTS: "true"
           DO_DELETE_WATCHLISTS: "true"
           DO_IMPORT_WATCHLISTS: "true"
           DO_CREATE_WATCHLIST_ALERT: "true"
-          ALERT_CONDITION_NAME: "天底極致 - 通常モード Alert用 (20, 2, 12, 75, 35, 0.18, 5, 2.5)"
-          ALERT_TIMEFRAME_LABEL: "4 時間"
+
+          ALERT_CONDITION_NAME: ${{ vars.ALERT_CONDITION_NAME }}
+          ALERT_TIMEFRAME_LABEL: ${{ vars.ALERT_TIMEFRAME_LABEL }}
         run: npm run update
 
       - name: Upload debug screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-screenshots
-          path: tmp/*.png
+          name: tv-debug
+          path: tmp/**/*.png
           if-no-files-found: ignore
