@@ -101,6 +101,16 @@ async function safeClick(locator, options = {}) {
   }
 }
 
+async function forceDomClick(locator) {
+  try {
+    const el = locator.first();
+    await el.evaluate((node) => node.click());
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 async function clickFirstVisible(candidates, options = {}) {
   for (const locator of candidates) {
     const ok = await safeClick(locator, options);
@@ -115,6 +125,85 @@ async function wait(ms) {
 
 async function existsVisible(locator) {
   return locator.first().isVisible().catch(() => false);
+}
+
+async function countOf(locator) {
+  return locator.count().catch(() => 0);
+}
+
+// ==============================
+// Generic UI cleanup
+// ==============================
+async function dismissBlockingOverlays(page) {
+  const closeButtons = [
+    page.locator('button[data-qa-id="close"]'),
+    page.locator('button[aria-label="閉じる"]'),
+    page.locator('button[aria-label="Close"]'),
+    page.locator('button:has-text("閉じる")'),
+    page.locator('button:has-text("Close")'),
+    page.locator('[data-name="close"]'),
+  ];
+
+  for (const btn of closeButtons) {
+    if (await existsVisible(btn)) {
+      await safeClick(btn, { timeout: 1500, force: true }).catch(() => {});
+      await page.waitForTimeout(300);
+    }
+  }
+
+  for (let i = 0; i < 4; i++) {
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(250);
+  }
+}
+
+async function closeMenus(page) {
+  await dismissBlockingOverlays(page);
+}
+
+async function isAnyMenuOpen(page) {
+  const candidates = [
+    page.locator('div[data-role="menuitem"]').first(),
+    page.locator('[role="menu"] [data-role="menuitem"]').first(),
+    page.locator('[data-qa-id="popup-menu-container"] [data-role="menuitem"]').first(),
+    page.locator('span.label-jFqVJoPk').first(),
+    page.locator('span.labelRow-jFqVJoPk').first(),
+  ];
+
+  for (const c of candidates) {
+    if (await existsVisible(c)) return true;
+  }
+  return false;
+}
+
+async function getMenuRoots(page) {
+  return [
+    page.locator('[data-qa-id="popup-menu-container"]').last(),
+    page.locator('[role="menu"]').last(),
+    page.locator('body'),
+  ];
+}
+
+async function scrollMenuRoots(page) {
+  const roots = await getMenuRoots(page);
+
+  for (const root of roots) {
+    for (let i = 0; i < 12; i++) {
+      try {
+        await root.evaluate((el, step) => {
+          const nodes = [el, ...el.querySelectorAll("*")];
+          for (const n of nodes) {
+            try {
+              if (n.scrollHeight > n.clientHeight) {
+                n.scrollTop = step;
+              }
+            } catch (_) {}
+          }
+        }, i * 220);
+      } catch (_) {}
+      await page.waitForTimeout(120);
+    }
+  }
 }
 
 // ==============================
@@ -165,34 +254,14 @@ async function getCurrentWatchlistTitle(page) {
   return "";
 }
 
-async function isAnyMenuOpen(page) {
-  const candidates = [
-    page.locator('div[data-role="menuitem"]').first(),
-    page.locator('[role="menu"] [data-role="menuitem"]').first(),
-    page.locator('[data-qa-id="popup-menu-container"] [data-role="menuitem"]').first(),
-    page.locator('span.label-jFqVJoPk').first(),
-  ];
-
-  for (const c of candidates) {
-    if (await existsVisible(c)) return true;
-  }
-  return false;
-}
-
-async function closeMenus(page) {
-  for (let i = 0; i < 3; i++) {
-    await page.keyboard.press("Escape").catch(() => {});
-    await page.waitForTimeout(300);
-  }
-}
-
 async function openWatchlistMenu(page) {
   await ensureWatchlistPanelOpen(page);
 
   const menuButton = page.locator('button[data-name="watchlists-button"]').first();
 
-  for (let attempt = 1; attempt <= 8; attempt++) {
+  for (let attempt = 1; attempt <= 10; attempt++) {
     await closeMenus(page);
+    await page.waitForTimeout(300);
 
     const clicked = await safeClick(menuButton, { timeout: 8000, force: true });
     if (!clicked) {
@@ -200,7 +269,7 @@ async function openWatchlistMenu(page) {
       continue;
     }
 
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(1500);
 
     if (await isAnyMenuOpen(page)) {
       console.log(`watchlist menu opened. retry=${attempt}`);
@@ -215,21 +284,37 @@ async function openWatchlistMenu(page) {
   throw new Error("ウォッチリストメニューを開けませんでした");
 }
 
+// ==============================
+// Menu helpers
+// ==============================
 async function clickMenuItem(page, regex) {
   const candidates = [
     page.locator('div[data-role="menuitem"]').filter({ hasText: regex }),
     page.locator('[role="menu"] div[data-role="menuitem"]').filter({ hasText: regex }),
     page.locator('[data-qa-id="popup-menu-container"] div[data-role="menuitem"]').filter({ hasText: regex }),
     page.locator('span.label-jFqVJoPk').filter({ hasText: regex }).locator("xpath=ancestor::*[@data-role='menuitem'][1]"),
+    page.locator('span.labelRow-jFqVJoPk').filter({ hasText: regex }).locator("xpath=ancestor::*[@data-role='menuitem'][1]"),
+    page.locator(`text=${regex.source}`),
   ];
 
-  const ok = await clickFirstVisible(candidates, { timeout: 5000, force: true });
-  if (!ok) {
-    await safeScreenshot(page, `menuitem_not_found_${String(regex)}`);
-    throw new Error(`メニュー項目が見つかりませんでした: ${regex}`);
+  for (const c of candidates) {
+    if (await existsVisible(c)) {
+      await c.first().scrollIntoViewIfNeeded().catch(() => {});
+      const ok1 = await safeClick(c, { timeout: 3000, force: true });
+      if (ok1) {
+        await page.waitForTimeout(1200);
+        return;
+      }
+      const ok2 = await forceDomClick(c);
+      if (ok2) {
+        await page.waitForTimeout(1200);
+        return;
+      }
+    }
   }
 
-  await page.waitForTimeout(1200);
+  await safeScreenshot(page, `menuitem_not_found_${String(regex)}`);
+  throw new Error(`メニュー項目が見つかりませんでした: ${regex}`);
 }
 
 async function closeOpenListDialogIfVisible(page) {
@@ -268,7 +353,7 @@ async function openListOpenDialog(page) {
 
   await openWatchlistMenu(page);
   await clickMenuItem(page, /リストを開く|Open list/i);
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(1800);
 }
 
 async function switchWatchlistTo(page, listName) {
@@ -277,7 +362,7 @@ async function switchWatchlistTo(page, listName) {
   await openListOpenDialog(page);
 
   const row = page.locator(`div[data-role="list-item"][data-title="${listName}"]`).first();
-  await row.waitFor({ state: "visible", timeout: 12000 });
+  await row.waitFor({ state: "visible", timeout: 15000 });
   await row.scrollIntoViewIfNeeded().catch(() => {});
   await row.click({ timeout: 5000, force: true });
 
@@ -288,7 +373,7 @@ async function switchWatchlistTo(page, listName) {
   let current = "";
   let titleOk = false;
 
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 15; i++) {
     current = await getCurrentWatchlistTitle(page);
     if (current && current.includes(listName)) {
       titleOk = true;
@@ -304,8 +389,8 @@ async function switchWatchlistTo(page, listName) {
 
   console.log(`Watchlist switched: ${listName}`);
 
-  // 内部状態安定待ち
-  await page.waitForTimeout(3500);
+  // 重いリスト向けに十分待つ
+  await page.waitForTimeout(5000);
 }
 
 async function deleteManagedWatchlistsByPrefix(page, prefix) {
@@ -315,7 +400,7 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
 
   for (let round = 0; round < 50; round++) {
     const titles = page.locator("div.title-ODL8WA9K");
-    const count = await titles.count().catch(() => 0);
+    const count = await countOf(titles);
 
     let targetIndex = -1;
     let targetName = "";
@@ -508,7 +593,7 @@ async function deleteManagedAlerts(page, prefixes) {
 
   for (let round = 0; round < 100; round++) {
     const tickerItems = page.locator('[data-name="alert-item-ticker"]');
-    const count = await tickerItems.count().catch(() => 0);
+    const count = await countOf(tickerItems);
 
     let targetTicker = null;
     let targetText = "";
@@ -574,93 +659,63 @@ async function deleteManagedAlerts(page, prefixes) {
   }
 }
 
-async function getMenuRoots(page) {
-  return [
-    page.locator('[data-qa-id="popup-menu-container"]').last(),
-    page.locator('[role="menu"]').last(),
-    page.locator('body'),
+async function findAddAlertMenuItem(page) {
+  const textRe = /リストにアラートを追加|Add alert to list/i;
+
+  const candidates = [
+    page.locator('[data-qa-id="popup-menu-container"] div[data-role="menuitem"]').filter({ hasText: textRe }),
+    page.locator('[role="menu"] div[data-role="menuitem"]').filter({ hasText: textRe }),
+    page.locator('div[data-role="menuitem"]').filter({ hasText: textRe }),
+    page.locator('span.label-jFqVJoPk').filter({ hasText: textRe }).locator("xpath=ancestor::*[@data-role='menuitem'][1]"),
+    page.locator('span.labelRow-jFqVJoPk').filter({ hasText: textRe }).locator("xpath=ancestor::*[@data-role='menuitem'][1]"),
+    page.locator('text=リストにアラートを追加…').locator("xpath=ancestor::*[@data-role='menuitem'][1]"),
+    page.locator('text=リストにアラートを追加').locator("xpath=ancestor::*[@data-role='menuitem'][1]"),
+    page.locator('text=Add alert to list').locator("xpath=ancestor::*[@data-role='menuitem'][1]"),
+    page.locator('svg').locator("xpath=ancestor::*[@data-role='menuitem'][1]").filter({ hasText: textRe }),
   ];
-}
 
-async function scrollMenuRoot(root) {
-  try {
-    await root.evaluate((el) => {
-      const targets = [el, ...el.querySelectorAll("*")];
-      for (const t of targets) {
-        try {
-          t.scrollTop = 0;
-        } catch (_) {}
-      }
-    });
-  } catch (_) {}
-
-  for (let i = 0; i < 8; i++) {
-    try {
-      await root.evaluate((el, step) => {
-        const targets = [el, ...el.querySelectorAll("*")];
-        for (const t of targets) {
-          try {
-            if (t.scrollHeight > t.clientHeight) {
-              t.scrollTop = step;
-            }
-          } catch (_) {}
-        }
-      }, i * 200);
-    } catch (_) {}
-    await wait(150);
+  for (const c of candidates) {
+    if (await existsVisible(c)) return c.first();
   }
+
+  return null;
 }
 
 async function clickAddAlertToList(page) {
-  const textRe = /リストにアラートを追加|Add alert to list/i;
-
-  for (let attempt = 1; attempt <= 12; attempt++) {
+  for (let attempt = 1; attempt <= 15; attempt++) {
+    await dismissBlockingOverlays(page);
     await openWatchlistMenu(page);
-    await page.waitForTimeout(1800);
+    await page.waitForTimeout(2200);
 
-    const roots = await getMenuRoots(page);
+    await scrollMenuRoots(page);
 
-    for (const root of roots) {
-      await scrollMenuRoot(root);
+    let item = await findAddAlertMenuItem(page);
+
+    if (!item) {
+      // menu roots が古い可能性を潰すため、一度閉じて開き直し
+      console.log(`Add-alert menu not visible yet. retry=${attempt}`);
+      await safeScreenshot(page, `add_alert_retry_${attempt}`);
+      await closeMenus(page);
+      await page.waitForTimeout(1800);
+      continue;
     }
 
-    const candidates = [
-      page.locator('div[data-role="menuitem"]').filter({ hasText: textRe }),
-      page.locator('[role="menu"] div[data-role="menuitem"]').filter({ hasText: textRe }),
-      page.locator('[data-qa-id="popup-menu-container"] div[data-role="menuitem"]').filter({ hasText: textRe }),
-      page.locator('span.label-jFqVJoPk').filter({ hasText: textRe }).locator("xpath=ancestor::*[@data-role='menuitem'][1]"),
-      page.locator('span.labelRow-jFqVJoPk').filter({ hasText: textRe }).locator("xpath=ancestor::*[@data-role='menuitem'][1]"),
-      page.locator('text=リストにアラートを追加…'),
-      page.locator('text=リストにアラートを追加'),
-      page.locator('text=Add alert to list'),
-    ];
+    await item.scrollIntoViewIfNeeded().catch(() => {});
+    await item.hover().catch(() => {});
+    await page.waitForTimeout(300);
 
-    let clicked = false;
-
-    for (const candidate of candidates) {
-      const el = candidate.first();
-      const visible = await el.isVisible().catch(() => false);
-      if (!visible) continue;
-
-      await el.scrollIntoViewIfNeeded().catch(() => {});
-      await el.hover().catch(() => {});
-      await page.waitForTimeout(250);
-
-      const ok = await safeClick(el, { timeout: 5000, force: true });
-      if (ok) {
-        clicked = true;
-        break;
-      }
+    let clicked = await safeClick(item, { timeout: 5000, force: true });
+    if (!clicked) {
+      clicked = await forceDomClick(item);
     }
 
     if (clicked) {
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(1800);
       console.log(`clickAddAlertToList: clicked. retry=${attempt}`);
       return;
     }
 
-    console.log(`Add-alert menu not visible yet. retry=${attempt}`);
-    await safeScreenshot(page, `add_alert_retry_${attempt}`);
+    console.log(`Add-alert menu click failed. retry=${attempt}`);
     await closeMenus(page);
     await page.waitForTimeout(1500);
   }
