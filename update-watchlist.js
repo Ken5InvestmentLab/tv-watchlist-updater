@@ -148,7 +148,7 @@ async function openWatchlistMenu(page) {
 
   const menuButton = page.locator('button[data-name="watchlists-button"]').first();
 
-  for (let attempt = 1; attempt <= 8; attempt++) {
+  for (let attempt = 1; attempt <= 10; attempt++) {
     await page.keyboard.press("Escape").catch(() => {});
     await page.waitForTimeout(300);
 
@@ -158,7 +158,7 @@ async function openWatchlistMenu(page) {
       continue;
     }
 
-    await page.waitForTimeout(800);
+    await page.waitForTimeout(1000);
 
     const anyMenuItem = page.locator('div[data-role="menuitem"]').first();
     const visible = await anyMenuItem.isVisible().catch(() => false);
@@ -546,33 +546,47 @@ async function deleteManagedAlerts(page, prefixes) {
 }
 
 async function clickAddAlertToList(page) {
-  const textRe = /リストにアラートを追加…|リストにアラートを追加|Add alert to list/i;
+  const textRe = /リストにアラートを追加|Add alert to list/i;
 
   for (let attempt = 1; attempt <= 12; attempt++) {
     await openWatchlistMenu(page);
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(1500);
 
-    const item = page
-      .locator('div[data-role="menuitem"]')
-      .filter({ hasText: textRe })
-      .first();
+    const candidates = [
+      page.locator('div[data-role="menuitem"]').filter({ hasText: textRe }),
+      page.locator('span.label-jFqVJoPk').filter({ hasText: textRe }).locator("xpath=ancestor::div[@data-role='menuitem'][1]"),
+      page.locator('span.labelRow-jFqVJoPk').filter({ hasText: textRe }).locator("xpath=ancestor::div[@data-role='menuitem'][1]"),
+      page.locator('div[data-role="menuitem"] span').filter({ hasText: textRe }).locator("xpath=ancestor::div[@data-role='menuitem'][1]"),
+      page.locator("text=リストにアラートを追加"),
+      page.locator("text=Add alert to list"),
+    ];
 
-    const visible = await item.isVisible().catch(() => false);
+    let clicked = false;
 
-    if (visible) {
-      await item.scrollIntoViewIfNeeded().catch(() => {});
-      await item.hover().catch(() => {});
+    for (const candidate of candidates) {
+      const visible = await candidate.first().isVisible().catch(() => false);
+      if (!visible) continue;
+
+      await candidate.first().scrollIntoViewIfNeeded().catch(() => {});
+      await candidate.first().hover().catch(() => {});
       await page.waitForTimeout(200);
-      await item.click({ force: true, timeout: 5000 });
+
+      const ok = await safeClick(candidate.first(), { timeout: 5000, force: true });
+      if (ok) {
+        clicked = true;
+        break;
+      }
+    }
+
+    if (clicked) {
       await page.waitForTimeout(1200);
       console.log(`clickAddAlertToList: clicked. retry=${attempt}`);
       return;
     }
 
     console.log(`Add-alert menu not visible yet. retry=${attempt}`);
-
     await page.keyboard.press("Escape").catch(() => {});
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1200);
   }
 
   await safeScreenshot(page, "click_add_alert_to_list_failed");
