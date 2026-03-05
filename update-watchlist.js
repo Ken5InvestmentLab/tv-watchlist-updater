@@ -13,7 +13,6 @@ const TRADINGVIEW_STORAGE_STATE = process.env.TRADINGVIEW_STORAGE_STATE;
 const WATCHLIST_1_URL = process.env.WATCHLIST_1_URL;
 const WATCHLIST_2_URL = process.env.WATCHLIST_2_URL;
 
-// prefix 用
 const WATCHLIST_1_PREFIX = process.env.WATCHLIST_1_NAME || "wl1";
 const WATCHLIST_2_PREFIX = process.env.WATCHLIST_2_NAME || "wl2";
 
@@ -22,7 +21,6 @@ const DO_DELETE_WATCHLISTS = (process.env.DO_DELETE_WATCHLISTS || "true") === "t
 const DO_IMPORT_WATCHLISTS = (process.env.DO_IMPORT_WATCHLISTS || "true") === "true";
 const DO_CREATE_WATCHLIST_ALERT = (process.env.DO_CREATE_WATCHLIST_ALERT || "true") === "true";
 
-// Alert condition
 const ALERT_CONDITION_NAME =
   process.env.ALERT_CONDITION_NAME ||
   "天底極致 - 通常モード Alert用 (20, 2, 12, 75, 35, 0.18, 5, 2.5)";
@@ -111,6 +109,12 @@ function isManagedListName(name, prefix) {
   return name === prefix || name.startsWith(`${prefix}_`);
 }
 
+function makeUploadCopyWithDesiredName(srcPath, desiredName) {
+  const dstPath = path.join(WORKDIR, `${desiredName}.txt`);
+  fs.copyFileSync(srcPath, dstPath);
+  return dstPath;
+}
+
 // ==============================
 // Base UI
 // ==============================
@@ -142,6 +146,7 @@ async function ensureWatchlistPanelOpen(page) {
 
   if (!(await menuButton.isVisible().catch(() => false))) {
     await safeScreenshot(page, "watchlist_panel_open_but_menu_missing");
+    throw new Error("ウォッチリストパネルは開いたはずですが、メニューボタンが見つかりませんでした");
   }
 }
 
@@ -156,13 +161,18 @@ async function openWatchlistMenu(page) {
 
   if (isOpened) return;
 
-  const ok = await safeClick(menuButton, { timeout: 8000, force: true });
+  const ok = await safeClick(menuButton, { timeout: 8000 });
   if (!ok) {
     await safeScreenshot(page, "watchlist_menu_not_found");
     throw new Error("ウォッチリストメニューボタンが見つかりませんでした");
   }
 
   await page.waitForTimeout(1200);
+}
+
+async function closeWatchlistMenuIfOpen(page) {
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.waitForTimeout(500);
 }
 
 async function getCurrentWatchlistTitle(page) {
@@ -178,29 +188,8 @@ async function getCurrentWatchlistTitle(page) {
   return "";
 }
 
-async function closeOpenListDialogIfVisible(page) {
-  const closeCandidates = [
-    page.locator('button[data-qa-id="close"]'),
-    page.locator('button[data-qa-id="close"] .visually-hidden-znwuaSC1').filter({ hasText: /メニューを閉じる|Close menu/i }).locator("xpath=ancestor::button[1]"),
-  ];
-
-  for (const c of closeCandidates) {
-    const el = c.first();
-    const visible = await el.isVisible().catch(() => false);
-    if (!visible) continue;
-
-    const clicked = await safeClick(el, { timeout: 3000, force: true });
-    if (clicked) {
-      await page.waitForTimeout(700);
-      return true;
-    }
-  }
-
-  return false;
-}
-
 // ==============================
-// Open list dialog / switch / delete
+// Generic menu helper
 // ==============================
 async function clickMenuItem(page, regex) {
   const candidates = [
@@ -218,6 +207,9 @@ async function clickMenuItem(page, regex) {
   await page.waitForTimeout(1200);
 }
 
+// ==============================
+// Open list dialog / switch / delete
+// ==============================
 async function openListOpenDialog(page) {
   const alreadyOpenCandidates = [
     page.locator("div.title-ODL8WA9K").first(),
@@ -225,14 +217,33 @@ async function openListOpenDialog(page) {
   ];
 
   for (const c of alreadyOpenCandidates) {
-    if (await c.isVisible().catch(() => false)) {
-      return;
-    }
+    if (await c.isVisible().catch(() => false)) return;
   }
 
   await openWatchlistMenu(page);
   await clickMenuItem(page, /リストを開く|Open list/i);
   await page.waitForTimeout(1500);
+}
+
+async function closeOpenListDialogIfVisible(page) {
+  const closeCandidates = [
+    page.locator('button[data-qa-id="close"]'),
+    page.locator('button[data-qa-id="close"]').filter({ hasText: /メニューを閉じる|Close menu/i }),
+  ];
+
+  for (const c of closeCandidates) {
+    const el = c.first();
+    const visible = await el.isVisible().catch(() => false);
+    if (!visible) continue;
+
+    const clicked = await safeClick(el, { timeout: 3000, force: true });
+    if (clicked) {
+      await page.waitForTimeout(700);
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function switchWatchlistTo(page, listName) {
@@ -250,50 +261,17 @@ async function switchWatchlistTo(page, listName) {
   await page.waitForTimeout(1000);
 
   let current = "";
-  let titleOk = false;
-
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 12; i++) {
     current = await getCurrentWatchlistTitle(page);
     if (current && current.includes(listName)) {
-      titleOk = true;
-      break;
-    }
-    await page.waitForTimeout(1000);
-  }
-
-  if (!titleOk) {
-    await safeScreenshot(page, `watchlist_switch_failed_${listName}`);
-    throw new Error(`ウォッチリスト切替確認失敗: ${listName} / current=${current}`);
-  }
-
-  // 重いリスト向け: Add alert メニューが見えるまで開き直しリトライ
-  let addAlertVisible = false;
-
-  for (let attempt = 0; attempt < 8; attempt++) {
-    await page.waitForTimeout(1000);
-
-    await page.keyboard.press("Escape").catch(() => {});
-    await page.waitForTimeout(400);
-
-    await openWatchlistMenu(page);
-
-    const addAlertItem = page
-      .locator('div[data-role="menuitem"]')
-      .filter({ hasText: /リストにアラートを追加…|リストにアラートを追加|Add alert to list/i })
-      .first();
-
-    addAlertVisible = await addAlertItem.isVisible().catch(() => false);
-
-    if (addAlertVisible) {
-      console.log(`Add-alert menu became visible after ${attempt + 1} attempt(s).`);
+      console.log("Watchlist switched:", current);
       return;
     }
-
-    console.log(`Add-alert menu not visible yet. retry=${attempt + 1}`);
+    await page.waitForTimeout(1000);
   }
 
-  await safeScreenshot(page, `add_alert_menu_not_ready_${listName}`);
-  throw new Error(`ウォッチリスト切替後に『リストにアラートを追加…』が表示されませんでした: ${listName}`);
+  await safeScreenshot(page, `watchlist_switch_failed_${listName}`);
+  throw new Error(`ウォッチリスト切替確認失敗: ${listName} / current=${current}`);
 }
 
 async function deleteManagedWatchlistsByPrefix(page, prefix) {
@@ -332,8 +310,8 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
 
     const deleteCandidates = [
       page.locator('[data-role="list-item-action"][data-name="remove-button"]').nth(targetIndex),
-      title.locator("xpath=ancestor::div[contains(@class,'container-ODL8WA9K')][1]").locator('[data-role="list-item-action"][data-name="remove-button"]'),
-      title.locator("xpath=ancestor::div[1]").locator('[data-role="list-item-action"][data-name="remove-button"]'),
+      title.locator("xpath=ancestor::div[contains(@class,'container')][1]").locator('[data-role="list-item-action"][data-name="remove-button"]'),
+      title.locator("xpath=ancestor::div[@data-role='list-item'][1]").locator('[data-role="list-item-action"][data-name="remove-button"]'),
       page.locator('[data-name="remove-button"]').nth(targetIndex),
     ];
 
@@ -418,12 +396,6 @@ async function maybeRenameImportedList(page, desiredName) {
   if (filled || confirmed) {
     await page.waitForTimeout(1500);
   }
-}
-
-function makeUploadCopyWithDesiredName(srcPath, desiredName) {
-  const dstPath = path.join(WORKDIR, `${desiredName}.txt`);
-  fs.copyFileSync(srcPath, dstPath);
-  return dstPath;
 }
 
 async function importWatchlistFromFile(page, filePath, desiredName) {
@@ -563,53 +535,37 @@ async function deleteManagedAlerts(page, prefixes) {
 }
 
 async function clickAddAlertToList(page) {
-  const menuButton = page.locator('button[data-name="watchlists-button"]').first();
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    await closeWatchlistMenuIfOpen(page);
+    await page.waitForTimeout(500);
 
-  const addAlertItem = page
-    .locator('div[data-role="menuitem"]')
-    .filter({ hasText: /リストにアラートを追加…|リストにアラートを追加|Add alert to list/i })
-    .first();
+    await openWatchlistMenu(page);
+    await page.waitForTimeout(1500);
 
-  for (let attempt = 1; attempt <= 12; attempt++) {
-    await page.keyboard.press("Escape").catch(() => {});
-    await page.waitForTimeout(400);
+    const item = page
+      .locator('div[data-role="menuitem"]')
+      .filter({ hasText: /リストにアラートを追加…|リストにアラートを追加|Add alert to list/i })
+      .first();
 
-    await menuButton.waitFor({ state: "visible", timeout: 10000 });
-    await menuButton.scrollIntoViewIfNeeded().catch(() => {});
-    await menuButton.click({ force: true, timeout: 8000 });
+    const visible = await item.isVisible().catch(() => false);
 
-    const visible = await addAlertItem
-      .waitFor({ state: "visible", timeout: 2500 })
-      .then(() => true)
-      .catch(() => false);
-
-    if (!visible) {
-      console.log(`clickAddAlertToList: menu not ready. retry=${attempt}`);
-      await page.waitForTimeout(attempt <= 3 ? 2000 : 1000);
-      continue;
-    }
-
-    await addAlertItem.scrollIntoViewIfNeeded().catch(() => {});
-    await addAlertItem.hover().catch(() => {});
-    await page.waitForTimeout(200);
-
-    const clicked = await addAlertItem
-      .click({ force: true, timeout: 5000 })
-      .then(() => true)
-      .catch(() => false);
-
-    if (clicked) {
-      console.log(`clickAddAlertToList: clicked. attempt=${attempt}`);
+    if (visible) {
+      await item.scrollIntoViewIfNeeded().catch(() => {});
+      await item.hover().catch(() => {});
+      await page.waitForTimeout(300);
+      await item.click({ force: true, timeout: 5000 });
       await page.waitForTimeout(1500);
+      console.log(`clickAddAlertToList: clicked. attempt=${attempt}`);
       return;
     }
 
-    console.log(`clickAddAlertToList: click failed. retry=${attempt}`);
+    console.log(`Add-alert menu not visible yet. retry=${attempt}`);
+    await closeWatchlistMenuIfOpen(page);
     await page.waitForTimeout(1000);
   }
 
   await safeScreenshot(page, "click_add_alert_to_list_failed");
-  throw new Error("『リストにアラートを追加…』のクリックに失敗しました");
+  throw new Error("『リストにアラートを追加…』がメニュー内に見つかりませんでした");
 }
 
 async function selectAlertCondition(page, conditionName) {
@@ -810,6 +766,7 @@ async function createWatchlistAlertIfPossible(page, listName) {
 
     console.log("DONE.");
     await safeScreenshot(page, "done");
+
     await browser.close();
   } catch (err) {
     console.error("FAILED:", err?.message || err);
