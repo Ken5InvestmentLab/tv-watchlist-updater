@@ -345,10 +345,6 @@ async function closeOpenListDialogIfVisible(page) {
 // Import watchlist
 // ==============================
 async function clickUploadList(page) {
-  await closeOpenListDialogIfVisible(page).catch(() => {});
-  await page.keyboard.press("Escape").catch(() => {});
-  await page.waitForTimeout(500);
-
   await ensureWatchlistPanelOpen(page);
   await openWatchlistMenu(page);
 
@@ -406,37 +402,20 @@ async function importWatchlistFromFile(page, filePath, desiredName) {
   console.log("File exists:", fs.existsSync(filePath));
   console.log("File size:", fs.statSync(filePath).size);
 
+  // 削除後に一覧が残っていたら閉じる
   await closeOpenListDialogIfVisible(page).catch(() => {});
-  await page.keyboard.press("Escape").catch(() => {});
   await page.waitForTimeout(500);
 
-  await clickUploadList(page);
+  await ensureWatchlistPanelOpen(page);
+  await openWatchlistMenu(page);
 
-  const fileInput = page.locator('input[type="file"]').first();
-  const hasInput = await fileInput.isVisible().catch(() => false);
+  const [chooser] = await Promise.all([
+    page.waitForEvent("filechooser", { timeout: 10000 }),
+    clickUploadList(page),
+  ]);
 
-  if (hasInput) {
-    await fileInput.setInputFiles(filePath);
-    console.log("setInputFiles done:", filePath);
-  } else {
-    console.log("input[type=file] not visible, trying filechooser fallback...");
-
-    const chooserPromise = page.waitForEvent("filechooser", { timeout: 5000 }).catch(() => null);
-
-    await closeOpenListDialogIfVisible(page).catch(() => {});
-    await page.keyboard.press("Escape").catch(() => {});
-    await page.waitForTimeout(300);
-    await clickUploadList(page);
-
-    const chooser = await chooserPromise;
-    if (!chooser) {
-      await safeScreenshot(page, "file_input_and_filechooser_not_found");
-      throw new Error("input[type=file] も filechooser も取得できませんでした");
-    }
-
-    await chooser.setFiles(filePath);
-    console.log("setFiles done:", filePath);
-  }
+  await chooser.setFiles(filePath);
+  console.log("setFiles done:", filePath);
 
   await page.waitForTimeout(3000);
   await safeScreenshot(page, `after_setFiles_${desiredName}`);
