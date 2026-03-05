@@ -237,6 +237,7 @@ async function switchWatchlistTo(page, listName) {
   await row.scrollIntoViewIfNeeded().catch(() => {});
   await row.click({ timeout: 5000, force: true });
 
+  // 重いので十分待つ
   await page.waitForTimeout(6000);
 
   const current = await getCurrentWatchlistTitle(page);
@@ -245,9 +246,13 @@ async function switchWatchlistTo(page, listName) {
     throw new Error(`ウォッチリスト切替確認失敗: ${listName} / current=${current}`);
   }
 
+  // 一覧を閉じる
   await closeOpenListDialogIfVisible(page).catch(() => {});
   await page.keyboard.press("Escape").catch(() => {});
-  await page.waitForTimeout(700);
+  await page.waitForTimeout(1000);
+
+  // さらにUI安定待ち
+  await page.waitForTimeout(3000);
 }
 
 async function deleteManagedWatchlistsByPrefix(page, prefix) {
