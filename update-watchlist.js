@@ -214,13 +214,20 @@ async function importWatchlistFromFile(page, filePath, desiredName) {
   await ensureWatchlistPanelOpen(page);
   await openWatchlistMenu(page);
 
+  console.log("Uploading file:", filePath);
+  console.log("File exists:", fs.existsSync(filePath));
+  console.log("File size:", fs.statSync(filePath).size);
+
   const [chooser] = await Promise.all([
     page.waitForEvent("filechooser", { timeout: 10000 }),
     clickUploadList(page),
   ]);
 
   await chooser.setFiles(filePath);
-  await page.waitForTimeout(2500);
+  console.log("setFiles done:", filePath);
+
+  await page.waitForTimeout(3000);
+  await safeScreenshot(page, "after_setFiles");
 
   await maybeRenameImportedList(page, desiredName);
   await page.waitForTimeout(2500);
