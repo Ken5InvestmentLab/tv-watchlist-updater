@@ -231,29 +231,11 @@ async function switchWatchlistTo(page, listName) {
   console.log("Switching watchlist to:", listName);
   await openListOpenDialog(page);
 
-  const row = page
-    .locator('div[data-role="list-item"]')
-    .filter({ has: page.locator(`div.title-ODL8WA9K[data-overflow-tooltip-html="${listName}"]`) })
-    .first();
+  const row = page.locator(`div[data-role="list-item"][data-title="${listName}"]`).first();
 
-  const rowVisible = await row.isVisible().catch(() => false);
-  if (!rowVisible) {
-    const fallbackRow = page
-      .locator(`div[data-role="list-item"][data-title="${listName}"]`)
-      .first();
-
-    const fallbackVisible = await fallbackRow.isVisible().catch(() => false);
-    if (!fallbackVisible) {
-      await safeScreenshot(page, `watchlist_not_found_${listName}`);
-      throw new Error(`指定ウォッチリストが見つかりませんでした: ${listName}`);
-    }
-
-    await fallbackRow.scrollIntoViewIfNeeded().catch(() => {});
-    await fallbackRow.click({ timeout: 5000, force: true });
-  } else {
-    await row.scrollIntoViewIfNeeded().catch(() => {});
-    await row.click({ timeout: 5000, force: true });
-  }
+  await row.waitFor({ state: "visible", timeout: 8000 });
+  await row.scrollIntoViewIfNeeded().catch(() => {});
+  await row.click({ timeout: 5000, force: true });
 
   await page.waitForTimeout(2000);
 
