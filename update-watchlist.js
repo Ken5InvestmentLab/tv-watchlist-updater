@@ -673,13 +673,60 @@ async function selectAlertSymbolsList(page, listName) {
 }
 
 async function submitAlertDialog(page) {
-  const btn = page.getByRole("button", { name: /作成|Create|保存|Save|OK/i }).first();
-  const ok = await safeClick(btn, { timeout: 20000, force: true });
-  if (!ok) {
+  console.log("Submitting alert dialog...");
+
+  // 「作成(Create)」ボタンを確実に見つけるために候補を複数用意
+  const btnCandidates = [
+    page.getByRole("button", { name: /作成|Create|保存|Save/i }),
+    page.locator('[data-name="submit-button"]'),
+    page.locator('button[type="submit"]')
+  ];
+
+  let targetBtn = null;
+
+  for (const locator of btnCandidates) {
+    const count = await locator.count().catch(() => 0);
+    // ダイアログはDOM（HTML）の最後に追加されるため、後ろから探す（.last()と同等の処理）
+    for (let i = count - 1; i >= 0; i--) { 
+      const el = locator.nth(i);
+      if (await el.isVisible().catch(() => false)) {
+        targetBtn = el;
+        break;
+      }
+    }
+    if (targetBtn) break;
+  }
+
+  if (!targetBtn) {
     await safeScreenshot(page, "alert_submit_button_not_found");
     throw new Error("アラート作成ボタンが見つかりませんでした");
   }
-  await page.waitForTimeout(1800);
+
+  // 通常のクリックより強力な clickBestEffort を使用
+  await clickBestEffort(targetBtn, 8000);
+  console.log("Submit button clicked! Waiting for dialog to close...");
+
+  // ダイアログが閉じるのを待機（閉じていなければ再クリックして押し込む）
+  let dialogClosed = false;
+  for (let i = 0; i < 5; i++) {
+    await page.waitForTimeout(2000);
+    const stillVisible = await targetBtn.isVisible().catch(() => false);
+    if (!stillVisible) {
+      dialogClosed = true;
+      console.log("Dialog closed successfully.");
+      break;
+    }
+    console.log("Dialog still visible, retrying click...");
+    await clickBestEffort(targetBtn, 5000); // 空振りしていたらもう一度クリック
+  }
+
+  if (!dialogClosed) {
+    console.log("Warning: Dialog might not have closed properly.");
+    await safeScreenshot(page, "alert_submit_warning");
+  }
+
+  // トレビューのサーバーへ保存される通信の時間を長めに確保
+  await page.waitForTimeout(4000);
 }
 
 async function createWatchlistAlertIfPossible(page, listName) {
