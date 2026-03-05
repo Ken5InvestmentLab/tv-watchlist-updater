@@ -229,32 +229,69 @@ async function openListOpenDialog(page) {
 
 async function switchWatchlistTo(page, listName) {
   console.log("Switching watchlist to:", listName);
+
+  // 一覧を開く
   await openListOpenDialog(page);
 
   const row = page.locator(`div[data-role="list-item"][data-title="${listName}"]`).first();
-
-  await row.waitFor({ state: "visible", timeout: 8000 });
+  await row.waitFor({ state: "visible", timeout: 10000 });
   await row.scrollIntoViewIfNeeded().catch(() => {});
   await row.click({ timeout: 5000, force: true });
 
-  // 重いので十分待つ
-  await page.waitForTimeout(6000);
-
-  const current = await getCurrentWatchlistTitle(page);
-  if (!current.includes(listName)) {
-    await safeScreenshot(page, `watchlist_switch_failed_${listName}`);
-    throw new Error(`ウォッチリスト切替確認失敗: ${listName} / current=${current}`);
-  }
-
-  // 一覧を閉じる
+  // いったん一覧を閉じる
   await closeOpenListDialogIfVisible(page).catch(() => {});
   await page.keyboard.press("Escape").catch(() => {});
   await page.waitForTimeout(1000);
 
-  // さらにUI安定待ち
-  await page.waitForTimeout(3000);
-}
+  // タイトル反映確認
+  let current = "";
+  let titleOk = false;
 
+  for (let i = 0; i < 10; i++) {
+    current = await getCurrentWatchlistTitle(page);
+    if (current && current.includes(listName)) {
+      titleOk = true;
+      break;
+    }
+    await page.waitForTimeout(1000);
+  }
+
+  if (!titleOk) {
+    await safeScreenshot(page, `watchlist_switch_failed_${listName}`);
+    throw new Error(`ウォッチリスト切替確認失敗: ${listName} / current=${current}`);
+  }
+
+  // 重いリスト向け:
+  // 「リストにアラートを追加…」が見えるまで
+  // 1秒待つ → メニュー開き直す → 再確認 を繰り返す
+  let addAlertVisible = false;
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await page.waitForTimeout(1000);
+
+    // 念のためメニューを開き直す
+    await openWatchlistMenu(page);
+
+    const addAlertItem = page
+      .locator('div[data-role="menuitem"]')
+      .filter({ hasText: /リストにアラートを追加|Add alert to list/i })
+      .first();
+
+    addAlertVisible = await addAlertItem.isVisible().catch(() => false);
+
+    if (addAlertVisible) {
+      console.log(`Add-alert menu became visible after ${attempt + 1} attempt(s).`);
+      return;
+    }
+
+    // 開いたまま次ループに行くと不安定なことがあるので一度閉じる
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(500);
+  }
+
+  await safeScreenshot(page, `add_alert_menu_not_ready_${listName}`);
+  throw new Error(`ウォッチリスト切替後に『リストにアラートを追加…』が表示されませんでした: ${listName}`);
+}
 async function deleteManagedWatchlistsByPrefix(page, prefix) {
   console.log(`Deleting watchlists with prefix: ${prefix}`);
 
