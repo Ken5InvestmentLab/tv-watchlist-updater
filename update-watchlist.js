@@ -207,13 +207,20 @@ async function clickMenuItem(page, regex) {
 }
 
 async function openListOpenDialog(page) {
+  const alreadyOpenCandidates = [
+    page.locator("div.title-ODL8WA9K").first(),
+    page.locator('[data-role="list-item-action"][data-name="remove-button"]').first(),
+  ];
+
+  for (const c of alreadyOpenCandidates) {
+    if (await c.isVisible().catch(() => false)) {
+      return;
+    }
+  }
+
   await openWatchlistMenu(page);
   await clickMenuItem(page, /リストを開く|Open list/i);
   await page.waitForTimeout(1500);
-}
-
-async function getOpenListRows(page) {
-  return page.locator('div.title-ODL8WA9K');
 }
 
 async function switchWatchlistTo(page, listName) {
@@ -240,9 +247,9 @@ async function switchWatchlistTo(page, listName) {
 async function deleteManagedWatchlistsByPrefix(page, prefix) {
   console.log(`Deleting watchlists with prefix: ${prefix}`);
 
-  for (let round = 0; round < 50; round++) {
-    await openListOpenDialog(page);
+  await openListOpenDialog(page);
 
+  for (let round = 0; round < 50; round++) {
     const titles = page.locator("div.title-ODL8WA9K");
     const count = await titles.count().catch(() => 0);
 
@@ -271,12 +278,11 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     await title.hover().catch(() => {});
     await page.waitForTimeout(500);
 
-    const row = title.locator("xpath=ancestor::*[self::div][1]");
     const deleteCandidates = [
-      row.locator('[data-role="list-item-action"][data-name="remove-button"]'),
-      row.locator('[data-name="remove-button"]'),
-      row.locator('[aria-label="削除"]'),
       page.locator('[data-role="list-item-action"][data-name="remove-button"]').nth(targetIndex),
+      title.locator("xpath=ancestor::div[contains(@class,'item')][1]").locator('[data-role="list-item-action"][data-name="remove-button"]'),
+      title.locator("xpath=ancestor::div[1]").locator('[data-role="list-item-action"][data-name="remove-button"]'),
+      page.locator('[data-name="remove-button"]').nth(targetIndex),
     ];
 
     let deleted = false;
@@ -305,6 +311,12 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
 
     await clickFirstVisible(confirmCandidates, { timeout: 5000, force: true });
     await page.waitForTimeout(1500);
+
+    // 削除後に一覧が閉じた場合だけ開き直す
+    const listStillVisible = await page.locator("div.title-ODL8WA9K").first().isVisible().catch(() => false);
+    if (!listStillVisible) {
+      await openListOpenDialog(page);
+    }
   }
 }
 
