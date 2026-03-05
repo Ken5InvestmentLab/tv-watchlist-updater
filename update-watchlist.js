@@ -216,66 +216,54 @@ async function getOpenListRows(page) {
   return page.locator('div.title-ODL8WA9K');
 }
 
-async function deleteManagedWatchlistsByPrefix(page, prefix) {
-  console.log(`Deleting watchlists with prefix: ${prefix}`);
+async function deleteManagedAlerts(page, prefixes) {
+  await openAlertsPanel(page);
 
-  for (let round = 0; round < 50; round++) {
-    await openListOpenDialog(page);
+  for (let round = 0; round < 100; round++) {
+    const tickerItems = page.locator('[data-name="alert-item-ticker"]');
+    const count = await tickerItems.count().catch(() => 0);
 
-    const titles = page.locator('div.title-ODL8WA9K');
-    const count = await titles.count().catch(() => 0);
-
-    let targetIndex = -1;
-    let targetName = "";
+    let targetTicker = null;
+    let targetText = "";
 
     for (let i = 0; i < count; i++) {
-      const text = (await titles.nth(i).textContent().catch(() => "")).trim();
-      if (!isManagedListName(text, prefix)) continue;
-      targetIndex = i;
-      targetName = text;
-      break;
-    }
+      const txt = (await tickerItems.nth(i).textContent().catch(() => "")).trim();
+      if (!txt) continue;
 
-    if (targetIndex === -1) {
-      console.log(`No more managed watchlists for prefix: ${prefix}`);
-      // 閉じる用に ESC
-      await page.keyboard.press("Escape").catch(() => {});
-      await page.waitForTimeout(500);
-      break;
-    }
-
-    console.log(`Deleting watchlist: ${targetName}`);
-
-    const title = titles.nth(targetIndex);
-    const row = title.locator("xpath=ancestor::*[self::div or self::span][1]");
-    const deleteBtnCandidates = [
-      row.locator('[data-role="list-item-action"][data-name="remove-button"]'),
-      row.locator('[aria-label="削除"]'),
-      row.locator('[data-name="remove-button"]'),
-      page.locator(`#list-item-${targetIndex}-action-4`),
-    ];
-
-    let deleted = false;
-    for (const btn of deleteBtnCandidates) {
-      const ok = await safeClick(btn, { timeout: 5000, force: true });
-      if (ok) {
-        deleted = true;
+      const matched = prefixes.some((p) => txt.startsWith(`${p}_`) || txt.startsWith(`${p},`) || txt === p);
+      if (matched) {
+        targetTicker = tickerItems.nth(i);
+        targetText = txt;
         break;
       }
     }
 
-    if (!deleted) {
-      // hoverで出ることがある
-      await title.hover().catch(() => {});
-      await page.waitForTimeout(500);
-
-      const btnFallback = row.locator('[data-role="list-item-action"][data-name="remove-button"]').first();
-      deleted = await safeClick(btnFallback, { timeout: 5000, force: true });
+    if (!targetTicker) {
+      console.log("No more managed alerts.");
+      break;
     }
 
+    console.log("Deleting alert:", targetText);
+
+    await targetTicker.scrollIntoViewIfNeeded().catch(() => {});
+    await targetTicker.click({ button: "right", timeout: 5000 }).catch(async () => {
+      await targetTicker.hover().catch(() => {});
+      await page.waitForTimeout(500);
+      await targetTicker.click({ button: "right", force: true, timeout: 5000 });
+    });
+
+    await page.waitForTimeout(800);
+
+    const deleteMenuCandidates = [
+      page.locator('tr[data-role="menuitem"]').filter({ hasText: /^削除$|Delete/ }),
+      page.locator('tr[data-role="menuitem"] [data-label="true"]').filter({ hasText: /^削除$|Delete/ }).locator("xpath=ancestor::tr[1]"),
+      page.locator('[data-role="menuitem"]').filter({ hasText: /^削除$|Delete/ }),
+    ];
+
+    const deleted = await clickFirstVisible(deleteMenuCandidates, { timeout: 5000, force: true });
     if (!deleted) {
-      await safeScreenshot(page, `watchlist_delete_button_not_found_${prefix}`);
-      throw new Error(`ウォッチリスト削除ボタンが見つかりませんでした: ${targetName}`);
+      await safeScreenshot(page, "alert_delete_context_menu_not_found");
+      throw new Error(`アラート右クリックメニューの『削除』が見つかりませんでした: ${targetText}`);
     }
 
     await page.waitForTimeout(1000);
@@ -287,6 +275,7 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
       page.locator('button:has-text("OK")'),
       page.locator('button:has-text("はい")'),
     ];
+
     await clickFirstVisible(confirmCandidates, { timeout: 5000, force: true });
     await page.waitForTimeout(1500);
   }
