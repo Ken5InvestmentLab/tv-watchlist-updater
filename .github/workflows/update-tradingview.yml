@@ -5,6 +5,10 @@ on:
     types: [build_complete]  # 1つ目からの合図を受け取った時に起動
   workflow_dispatch:        # 手動実行用
 
+concurrency:
+  group: tv-watchlist-updater
+  cancel-in-progress: true
+
 jobs:
   run:
     runs-on: ubuntu-latest
