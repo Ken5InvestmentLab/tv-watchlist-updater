@@ -2,8 +2,8 @@ name: TV Watchlist Update (Playwright)
 
 on:
   repository_dispatch:
-    types: [build_complete]  # 1つ目からの合図を受け取った時に起動
-  workflow_dispatch:        # 手動実行用
+    types: [build_complete]
+  workflow_dispatch:
 
 concurrency:
   group: tv-watchlist-updater
@@ -62,17 +62,37 @@ jobs:
             }]
           }'
 
-          [ -n "${{ secrets.DISCORD_WEBHOOK_1 }}" ] && \
-          curl -H "Content-Type: application/json" \
-               -X POST \
-               -d "$payload" \
-               "${{ secrets.DISCORD_WEBHOOK_1 }}"
+          notify_failed=0
 
-          [ -n "${{ secrets.DISCORD_WEBHOOK_2 }}" ] && \
-          curl -H "Content-Type: application/json" \
-               -X POST \
-               -d "$payload" \
-               "${{ secrets.DISCORD_WEBHOOK_2 }}"
+          send_webhook() {
+            local url="$1"
+            local name="$2"
+
+            if [ -z "$url" ]; then
+              echo "$name is empty. Skip."
+              return 0
+            fi
+
+            echo "Sending to $name ..."
+            if ! curl --fail --silent --show-error \
+              -H "Content-Type: application/json" \
+              -X POST \
+              -d "$payload" \
+              "$url"; then
+              echo "Failed: $name"
+              notify_failed=1
+            else
+              echo "Success: $name"
+            fi
+          }
+
+          send_webhook "${{ secrets.DISCORD_WEBHOOK_1 }}" "DISCORD_WEBHOOK_1"
+          send_webhook "${{ secrets.DISCORD_WEBHOOK_2 }}" "DISCORD_WEBHOOK_2"
+
+          if [ "$notify_failed" -ne 0 ]; then
+            echo "One or more Discord notifications failed."
+            exit 1
+          fi
 
       - name: Notify Discord on Failure
         if: failure()
@@ -88,14 +108,34 @@ jobs:
             }]
           }'
 
-          [ -n "${{ secrets.DISCORD_WEBHOOK_1 }}" ] && \
-          curl -H "Content-Type: application/json" \
-               -X POST \
-               -d "$payload" \
-               "${{ secrets.DISCORD_WEBHOOK_1 }}"
+          notify_failed=0
 
-          [ -n "${{ secrets.DISCORD_WEBHOOK_2 }}" ] && \
-          curl -H "Content-Type: application/json" \
-               -X POST \
-               -d "$payload" \
-               "${{ secrets.DISCORD_WEBHOOK_2 }}"
+          send_webhook() {
+            local url="$1"
+            local name="$2"
+
+            if [ -z "$url" ]; then
+              echo "$name is empty. Skip."
+              return 0
+            fi
+
+            echo "Sending to $name ..."
+            if ! curl --fail --silent --show-error \
+              -H "Content-Type: application/json" \
+              -X POST \
+              -d "$payload" \
+              "$url"; then
+              echo "Failed: $name"
+              notify_failed=1
+            else
+              echo "Success: $name"
+            fi
+          }
+
+          send_webhook "${{ secrets.DISCORD_WEBHOOK_1 }}" "DISCORD_WEBHOOK_1"
+          send_webhook "${{ secrets.DISCORD_WEBHOOK_2 }}" "DISCORD_WEBHOOK_2"
+
+          if [ "$notify_failed" -ne 0 ]; then
+            echo "One or more Discord notifications failed."
+            exit 1
+          fi
