@@ -56,11 +56,31 @@ function reqEnv(name, val) {
 function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
 }
-async function downloadToFile(url, filePath) {
+async function downloadToFile(url, filePath, label = url) {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Download failed ${res.status}: ${url}`);
+  if (!res.ok) throw new Error(`Download failed ${res.status}: ${label} ${url}`);
   const buf = Buffer.from(await res.arrayBuffer());
   fs.writeFileSync(filePath, buf);
+}
+
+async function downloadOptionalToFile(url, filePath, label = url) {
+  if (!url) {
+    console.log(`Skip optional watchlist: ${label} (URL未設定)`);
+    return false;
+  }
+
+  const res = await fetch(url);
+
+  if (res.status === 404) {
+    console.log(`Skip optional watchlist: ${label} (404)`);
+    return false;
+  }
+
+  if (!res.ok) throw new Error(`Download failed ${res.status}: ${label} ${url}`);
+
+  const buf = Buffer.from(await res.arrayBuffer());
+  fs.writeFileSync(filePath, buf);
+  return true;
 }
 async function safeScreenshot(page, label) {
   try {
@@ -762,7 +782,6 @@ async function createWatchlistAlertIfPossible(page, listName) {
   try {
     reqEnv("TRADINGVIEW_STORAGE_STATE", TRADINGVIEW_STORAGE_STATE);
     reqEnv("WATCHLIST_1_URL", WATCHLIST_1_URL);
-    reqEnv("WATCHLIST_2_URL", WATCHLIST_2_URL);
 
     ensureDir(WORKDIR);
 
@@ -770,8 +789,26 @@ async function createWatchlistAlertIfPossible(page, listName) {
     console.log("WATCHLIST_2_FINAL_NAME:", WATCHLIST_2_FINAL_NAME);
 
     console.log("Downloading watchlists...");
-    await downloadToFile(WATCHLIST_1_URL, OUT1);
-    await downloadToFile(WATCHLIST_2_URL, OUT2);
+
+    const activeLists = [];
+
+    await downloadToFile(WATCHLIST_1_URL, OUT1, "WATCHLIST_1_URL");
+    activeLists.push({
+      path: OUT1,
+      prefix: WATCHLIST_1_PREFIX,
+      finalName: WATCHLIST_1_FINAL_NAME,
+    });
+
+    const hasSecond = await downloadOptionalToFile(WATCHLIST_2_URL, OUT2, "WATCHLIST_2_URL");
+    if (hasSecond) {
+      activeLists.push({
+        path: OUT2,
+        prefix: WATCHLIST_2_PREFIX,
+        finalName: WATCHLIST_2_FINAL_NAME,
+      });
+    }
+
+    console.log(`Active watchlists: ${activeLists.length}`);
 
     console.log("Launching Playwright...");
     browser = await chromium.launch({
@@ -809,14 +846,16 @@ async function createWatchlistAlertIfPossible(page, listName) {
 
     if (DO_IMPORT_WATCHLISTS) {
       console.log("Importing watchlists...");
-      await importWatchlistFromFile(page, OUT1, WATCHLIST_1_FINAL_NAME);
-      await importWatchlistFromFile(page, OUT2, WATCHLIST_2_FINAL_NAME);
+      for (const list of activeLists) {
+        await importWatchlistFromFile(page, list.path, list.finalName);
+      }
     }
 
     if (DO_CREATE_WATCHLIST_ALERT) {
       console.log("Creating watchlist alerts...");
-      await createWatchlistAlertIfPossible(page, WATCHLIST_1_FINAL_NAME);
-      await createWatchlistAlertIfPossible(page, WATCHLIST_2_FINAL_NAME);
+      for (const list of activeLists) {
+        await createWatchlistAlertIfPossible(page, list.finalName);
+      }
     }
 
     console.log("DONE.");
