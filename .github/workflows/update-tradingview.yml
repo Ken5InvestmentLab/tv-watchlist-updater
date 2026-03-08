@@ -53,7 +53,7 @@ jobs:
         if: success()
         run: |
           payload='{
-            "username": "TradingView Alert",
+            "username": "System Log",
             "content": "🟢 **[System] Browser Automation Success**",
             "embeds": [{
               "title": "Update Completed",
@@ -99,7 +99,7 @@ jobs:
         if: failure()
         run: |
           payload='{
-            "username": "TradingView Alert",
+            "username": "System Log",
             "content": "🔴 **[System] Browser Automation Error**",
             "embeds": [{
               "title": "Playwright Error Log",
