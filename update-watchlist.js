@@ -1155,6 +1155,9 @@ async function dumpAlertTickerTexts(page) {
       for (const list of activeLists) {
         await createWatchlistAlertIfPossible(page, list.finalName);
       }
+
+      console.log("After create: alert ticker dump");
+      await dumpAlertTickerTexts(page);
     }
 
     console.log("DONE.");
