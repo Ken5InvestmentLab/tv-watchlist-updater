@@ -26,6 +26,10 @@ const ALERT_TIMEFRAME_LABEL = process.env.ALERT_TIMEFRAME_LABEL || "4 時間";
 const NAV_TIMEOUT = 90000;
 const STEP_TIMEOUT = 45000;
 
+const ALERT_SLOT_RELEASE_WAIT_MS = Number(process.env.ALERT_SLOT_RELEASE_WAIT_MS || 45000);
+const WATCHLIST_PROMO_RETRY_MAX = Number(process.env.WATCHLIST_PROMO_RETRY_MAX || 3);
+const WATCHLIST_PROMO_RETRY_WAIT_MS = Number(process.env.WATCHLIST_PROMO_RETRY_WAIT_MS || 15000);
+
 const WORKDIR = path.resolve(process.cwd(), "tmp");
 const OUT1 = path.join(WORKDIR, "wl1.txt");
 const OUT2 = path.join(WORKDIR, "wl2.txt");
@@ -647,6 +651,76 @@ async function deleteManagedAlerts(page, prefixes) {
   throw new Error("アラート削除ループが上限に達しました");
 }
 
+// ==============================
+// Watchlist alert promo dialog
+// ==============================
+async function isWatchlistPromoDialogVisible(page) {
+  const markers = [
+    page.getByText(/One alert to track an entire watchlist/i).first(),
+    page.locator('button[data-qa-id="promo-dialog-close-button"]').first(),
+    page.getByText(/Current plan/i).first(),
+    page.getByText(/Premium/i).first(),
+    page.getByText(/Ultimate/i).first(),
+  ];
+
+  let hitCount = 0;
+  for (const marker of markers) {
+    if (await marker.isVisible().catch(() => false)) hitCount++;
+  }
+
+  return hitCount >= 2;
+}
+
+async function getWatchlistPromoDialogText(page) {
+  const dialogByTitle = page
+    .getByText(/One alert to track an entire watchlist/i)
+    .first()
+    .locator('xpath=ancestor::*[@role="dialog" or contains(@class,"dialog") or contains(@class,"modal")][1]')
+    .first();
+
+  const dialogText = ((await dialogByTitle.textContent().catch(() => "")) || "").trim();
+  if (dialogText) return dialogText;
+
+  const bodyText = ((await page.locator("body").textContent().catch(() => "")) || "").trim();
+  const marker = "One alert to track an entire watchlist";
+  const idx = bodyText.indexOf(marker);
+  if (idx >= 0) {
+    return bodyText.slice(idx, Math.min(bodyText.length, idx + 400));
+  }
+
+  return bodyText.slice(0, 400);
+}
+
+async function closeWatchlistPromoDialog(page) {
+  const closeCandidates = [
+    page.locator('button[data-qa-id="promo-dialog-close-button"]').first(),
+    page.locator('button[aria-label="閉じる"]').first(),
+    page.locator('button[aria-label="Close"]').first(),
+    page.getByRole("button", { name: /閉じる|Close/i }).first(),
+  ];
+
+  for (const btn of closeCandidates) {
+    const visible = await btn.isVisible().catch(() => false);
+    if (!visible) continue;
+
+    const clicked = await clickBestEffort(btn, 8000);
+    if (clicked) {
+      await page.waitForTimeout(1000);
+
+      const stillVisible = await isWatchlistPromoDialogVisible(page);
+      if (!stillVisible) {
+        console.log("[promo] promo dialog closed");
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+// ==============================
+// Create alert helpers
+// ==============================
 async function clickAddAlertToList(page) {
   const re = /リストに(高度な)?アラートを追加|Add( advanced)? alert( to list)?|アラートを追加/i;
 
@@ -768,7 +842,7 @@ async function selectAlertResolution(page, label) {
 
   await page.waitForTimeout(1000);
 
-  const re = new RegExp(`^${escapeRegex(label)}$|^4 hours$|^4 時間$`, "i");
+  const re = new RegExp(`^${escapeRegex(label)}$|^4 hours$|^4 時間$|^4h$`, "i");
   console.log("Looking for resolution option matching:", re);
 
   const optionCandidates = [
@@ -821,35 +895,36 @@ async function selectAlertSymbolsList(page, listName) {
   await page.waitForTimeout(700);
 }
 
-async function submitAlertDialog(page) {
-  console.log("Submitting alert dialog...");
-
+async function findVisibleAlertSubmitButton(page) {
   const btnCandidates = [
     page.getByRole("button", { name: /作成|Create|保存|Save/i }),
     page.locator('[data-name="submit-button"]'),
     page.locator('button[type="submit"]'),
   ];
 
-  let targetBtn = null;
-
   for (const locator of btnCandidates) {
     const count = await locator.count().catch(() => 0);
     for (let i = count - 1; i >= 0; i--) {
       const el = locator.nth(i);
       if (await el.isVisible().catch(() => false)) {
-        targetBtn = el;
-        break;
+        return el;
       }
     }
-    if (targetBtn) break;
   }
 
+  return null;
+}
+
+async function submitAlertDialog(page) {
+  console.log("Submitting alert dialog...");
+
+  let targetBtn = await findVisibleAlertSubmitButton(page);
   if (!targetBtn) {
     await safeScreenshot(page, "alert_submit_button_not_found");
     throw new Error("アラート作成ボタンが見つかりませんでした");
   }
 
-  const clicked = await clickBestEffort(targetBtn, 8000);
+  let clicked = await clickBestEffort(targetBtn, 8000);
   if (!clicked) {
     await safeScreenshot(page, "alert_submit_click_failed");
     throw new Error("アラート作成ボタンをクリックできませんでした");
@@ -858,8 +933,49 @@ async function submitAlertDialog(page) {
   console.log("Submit button clicked! Waiting for dialog to close...");
 
   let dialogClosed = false;
-  for (let i = 0; i < 8; i++) {
+  let promoRetryCount = 0;
+
+  for (let i = 0; i < 14; i++) {
     await page.waitForTimeout(1500);
+
+    if (await isWatchlistPromoDialogVisible(page)) {
+      promoRetryCount += 1;
+      const promoText = await getWatchlistPromoDialogText(page);
+
+      console.log(`[promo] Watchlist promo dialog detected (${promoRetryCount}/${WATCHLIST_PROMO_RETRY_MAX})`);
+      console.log(`[promo] ${promoText.replace(/\s+/g, " ").slice(0, 500)}`);
+
+      await safeScreenshot(page, `watchlist_promo_detected_${promoRetryCount}`);
+
+      const closed = await closeWatchlistPromoDialog(page);
+      if (!closed) {
+        await safeScreenshot(page, `watchlist_promo_close_failed_${promoRetryCount}`);
+        throw new Error("watchlist alert の案内モーダルを閉じられませんでした");
+      }
+
+      if (promoRetryCount >= WATCHLIST_PROMO_RETRY_MAX) {
+        throw new Error(
+          `watchlist alert の案内モーダルが ${promoRetryCount} 回連続で表示されました。枠解放の遅延またはTV側制限の可能性があります`
+        );
+      }
+
+      console.log(`[promo] waiting ${WATCHLIST_PROMO_RETRY_WAIT_MS}ms before retrying Create`);
+      await page.waitForTimeout(WATCHLIST_PROMO_RETRY_WAIT_MS);
+
+      targetBtn = await findVisibleAlertSubmitButton(page);
+      if (!targetBtn) {
+        await safeScreenshot(page, `alert_submit_button_missing_after_promo_${promoRetryCount}`);
+        throw new Error("案内モーダルを閉じた後、アラート作成ボタンが見つかりませんでした");
+      }
+
+      clicked = await clickBestEffort(targetBtn, 8000);
+      if (!clicked) {
+        await safeScreenshot(page, `alert_submit_retry_click_failed_${promoRetryCount}`);
+        throw new Error("案内モーダル後のCreate再クリックに失敗しました");
+      }
+
+      continue;
+    }
 
     const stillVisible = await targetBtn.isVisible().catch(() => false);
     if (!stillVisible) {
@@ -873,7 +989,10 @@ async function submitAlertDialog(page) {
       throw new Error("アラート作成時に上限または作成失敗メッセージを検知しました");
     }
 
-    await clickBestEffort(targetBtn, 5000);
+    if (i < 13) {
+      console.log("Dialog still visible, retrying click...");
+      await clickBestEffort(targetBtn, 5000);
+    }
   }
 
   if (!dialogClosed) {
@@ -942,6 +1061,7 @@ async function dumpAlertTickerTexts(page) {
   let browser;
   let context;
   let page;
+  let deletedAlertsThisRun = false;
 
   try {
     reqEnv("TRADINGVIEW_STORAGE_STATE", TRADINGVIEW_STORAGE_STATE);
@@ -1007,6 +1127,8 @@ async function dumpAlertTickerTexts(page) {
 
       console.log("After delete: alert ticker dump");
       await dumpAlertTickerTexts(page);
+
+      deletedAlertsThisRun = true;
     }
 
     if (DO_DELETE_WATCHLISTS) {
@@ -1024,6 +1146,11 @@ async function dumpAlertTickerTexts(page) {
     }
 
     if (DO_CREATE_WATCHLIST_ALERT) {
+      if (deletedAlertsThisRun) {
+        console.log(`Waiting ${ALERT_SLOT_RELEASE_WAIT_MS}ms for TradingView alert slot release...`);
+        await page.waitForTimeout(ALERT_SLOT_RELEASE_WAIT_MS);
+      }
+
       console.log("Creating watchlist alerts...");
       for (const list of activeLists) {
         await createWatchlistAlertIfPossible(page, list.finalName);
