@@ -548,17 +548,15 @@ async function importWatchlistFromFile(page, filePath, desiredName) {
 // ==============================
 async function isAlertsSidebarOpen(page) {
   const markers = [
-    page.getByText(/^Alerts$/).first(),
-    page.getByText(/^Log$/).first(),
-    page.locator('[role="tab"]').filter({ hasText: /^Alerts$|^Log$/i }).first(),
+    page.locator('[role="tab"]').filter({ hasText: /Alerts|Log|アラート/i }).first(),
+    page.getByText(/Alerts|Log|アラート/i).first(),
   ];
 
-  let visibleCount = 0;
   for (const marker of markers) {
-    if (await marker.isVisible().catch(() => false)) visibleCount++;
+    if (await marker.isVisible().catch(() => false)) return true;
   }
 
-  return visibleCount >= 2;
+  return false;
 }
 
 async function ensureAlertsPanelOpen(page) {
@@ -598,9 +596,9 @@ async function ensureAlertsPanelOpen(page) {
   }
 
   const alertsTabCandidates = [
-    page.getByRole("tab", { name: /^Alerts$/i }).first(),
-    page.getByText(/^Alerts$/).first(),
-    page.getByText(/^アラート$/).first(),
+    page.getByRole("tab", { name: /Alerts|アラート/i }).first(),
+    page.locator('[role="tab"]').filter({ hasText: /Alerts|アラート/i }).first(),
+    page.getByText(/Alerts|アラート/i).first(),
   ];
 
   for (const tab of alertsTabCandidates) {
