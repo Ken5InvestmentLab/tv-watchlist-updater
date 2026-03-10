@@ -947,30 +947,68 @@ async function selectAlertResolution(page, label) {
   await page.waitForTimeout(600);
 }
 
-async function selectAlertSymbolsList(page, listName) {
-  const disclosure = page.locator('[data-qa-id="ui-kit-disclosure-control main-symbols-select"]').first();
-  const visible = await disclosure.isVisible().catch(() => false);
+async function getAlertDialogRoot(page) {
+  const byTitle = page
+    .getByText(/Create alert on|アラートを作成/i)
+    .first()
+    .locator('xpath=ancestor::*[@role="dialog" or contains(@class,"dialog") or contains(@class,"modal")][1]')
+    .first();
 
-  if (!visible) {
-    await safeScreenshot(page, "alert_symbols_disclosure_not_found");
-    throw new Error("シンボル選択ボックスが見つかりませんでした");
+  if (await byTitle.isVisible().catch(() => false)) return byTitle;
+
+  const roleDialog = page.locator('[role="dialog"]').last();
+  if (await roleDialog.isVisible().catch(() => false)) return roleDialog;
+
+  return page.locator("body");
+}
+
+async function ensureAlertTargetList(page, listName) {
+  const dialog = await getAlertDialogRoot(page);
+  const dialogText = ((await dialog.textContent().catch(() => "")) || "").replace(/\s+/g, " ");
+
+  if (dialogText.includes(listName)) {
+    console.log(`Alert target list confirmed in dialog: ${listName}`);
+    return;
   }
 
-  const cur = (await disclosure.textContent().catch(() => "")) || "";
-  if (cur.includes(listName)) return;
+  const legacyDisclosure = dialog
+    .locator('[data-qa-id="ui-kit-disclosure-control main-symbols-select"]')
+    .first();
 
-  await disclosure.click({ force: true, timeout: 12000 });
-  await page.waitForTimeout(700);
+  const legacyVisible = await legacyDisclosure.isVisible().catch(() => false);
 
-  const option = page.locator('[role="option"]').filter({ hasText: new RegExp(`^${escapeRegex(listName)}$`) }).first();
-  const ok = await safeClick(option, { timeout: 20000, force: true });
+  if (legacyVisible) {
+    const cur = ((await legacyDisclosure.textContent().catch(() => "")) || "").trim();
+    if (cur.includes(listName)) {
+      console.log(`Alert target list confirmed in selector: ${listName}`);
+      return;
+    }
 
-  if (!ok) {
-    await safeScreenshot(page, `alert_symbols_option_not_found_${listName}`);
-    throw new Error(`アラート対象リストが見つかりませんでした: ${listName}`);
+    await legacyDisclosure.click({ force: true, timeout: 12000 });
+    await page.waitForTimeout(700);
+
+    const option = page
+      .locator('[role="option"]')
+      .filter({ hasText: new RegExp(`^${escapeRegex(listName)}$`) })
+      .first();
+
+    const ok = await safeClick(option, { timeout: 20000, force: true });
+    if (!ok) {
+      await safeScreenshot(page, `alert_target_option_not_found_${listName}`);
+      throw new Error(`アラート対象リストを補正できませんでした: ${listName}`);
+    }
+
+    await page.waitForTimeout(700);
+
+    const recheckText = ((await dialog.textContent().catch(() => "")) || "").replace(/\s+/g, " ");
+    if (recheckText.includes(listName)) {
+      console.log(`Alert target list corrected and confirmed: ${listName}`);
+      return;
+    }
   }
 
-  await page.waitForTimeout(700);
+  await safeScreenshot(page, `alert_target_list_mismatch_${listName}`);
+  throw new Error(`アラート対象リストを確認できませんでした: ${listName}`);
 }
 
 async function findVisibleAlertSubmitButton(page) {
@@ -1116,9 +1154,9 @@ async function createWatchlistAlertIfPossible(page, listName) {
   await page.waitForTimeout(4000);
 
   await clickAddAlertToList(page);
+  await ensureAlertTargetList(page, listName);
   await selectAlertCondition(page, ALERT_CONDITION_NAME);
   await selectAlertResolution(page, ALERT_TIMEFRAME_LABEL);
-  await selectAlertSymbolsList(page, listName);
 
   await safeScreenshot(page, `before_alert_submit_${listName}`);
   await submitAlertDialog(page);
