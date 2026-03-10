@@ -546,7 +546,71 @@ async function importWatchlistFromFile(page, filePath, desiredName) {
 // ==============================
 // Alerts
 // ==============================
-async function isAlertsPanelLikelyOpen(page) {
+async function isAlertsSidebarOpen(page) {
+  const markers = [
+    page.getByText(/^Alerts$/).first(),
+    page.getByText(/^Log$/).first(),
+    page.locator('[role="tab"]').filter({ hasText: /^Alerts$|^Log$/i }).first(),
+  ];
+
+  let visibleCount = 0;
+  for (const marker of markers) {
+    if (await marker.isVisible().catch(() => false)) visibleCount++;
+  }
+
+  return visibleCount >= 2;
+}
+
+async function ensureAlertsPanelOpen(page) {
+  if (!(await isAlertsSidebarOpen(page))) {
+    const candidates = [
+      page.locator('button[data-name="alerts"]').first(),
+      page.locator('[data-name="alerts"]').first(),
+      page.locator('button[aria-label="Alerts"]').first(),
+      page.locator('button[aria-label="アラート"]').first(),
+      page.locator('[data-tooltip="Alerts"]').first(),
+      page.locator('[data-tooltip="アラート"]').first(),
+    ];
+
+    let opened = false;
+
+    for (let attempt = 0; attempt < 4; attempt++) {
+      for (const c of candidates) {
+        const clicked = await safeClick(c, { timeout: 6000, force: true });
+        if (!clicked) continue;
+
+        await page.waitForTimeout(1200);
+
+        if (await isAlertsSidebarOpen(page)) {
+          opened = true;
+          break;
+        }
+      }
+
+      if (opened) break;
+      await page.waitForTimeout(600);
+    }
+
+    if (!opened) {
+      await safeScreenshot(page, "alerts_sidebar_not_opened");
+      throw new Error("アラートサイドバーを開けませんでした");
+    }
+  }
+
+  const alertsTabCandidates = [
+    page.getByRole("tab", { name: /^Alerts$/i }).first(),
+    page.getByText(/^Alerts$/).first(),
+    page.getByText(/^アラート$/).first(),
+  ];
+
+  for (const tab of alertsTabCandidates) {
+    if (await tab.isVisible().catch(() => false)) {
+      await safeClick(tab, { timeout: 5000, force: true }).catch(() => {});
+      await page.waitForTimeout(1000);
+      break;
+    }
+  }
+
   const markers = [
     page.locator('[data-name="alert-item-ticker"]').first(),
     page.locator('[data-name="alerts-manager"]').first(),
@@ -555,40 +619,17 @@ async function isAlertsPanelLikelyOpen(page) {
     page.getByText(/No alerts|No alerts created|アラートがありません|アラートはありません|アラートなし/i).first(),
   ];
 
-  for (const marker of markers) {
-    if (await marker.isVisible().catch(() => false)) return true;
-  }
-  return false;
-}
-
-async function ensureAlertsPanelOpen(page) {
-  if (await isAlertsPanelLikelyOpen(page)) return;
-
-  const candidates = [
-    page.locator('button[data-name="alerts"]'),
-    page.locator('button[aria-label="アラート"]'),
-    page.locator('button[data-tooltip="アラート"]'),
-    page.locator('button[aria-label="Alerts"]'),
-    page.locator('button[data-tooltip="Alerts"]'),
-  ];
-
-  for (let attempt = 0; attempt < 3; attempt++) {
-    for (const c of candidates) {
-      const clicked = await safeClick(c, { timeout: 8000 });
-      if (!clicked) continue;
-
-      await page.waitForTimeout(1200);
-
-      if (await isAlertsPanelLikelyOpen(page)) {
+  for (let i = 0; i < 10; i++) {
+    for (const marker of markers) {
+      if (await marker.isVisible().catch(() => false)) {
         return;
       }
     }
-
-    await page.waitForTimeout(600);
+    await page.waitForTimeout(800);
   }
 
-  await safeScreenshot(page, "alerts_panel_not_found");
-  throw new Error("アラートパネルを開けませんでした");
+  await safeScreenshot(page, "alerts_list_not_visible");
+  throw new Error("アラート一覧タブを表示できませんでした");
 }
 
 async function getAllAlertTickerTexts(page) {
@@ -599,10 +640,11 @@ async function getAllAlertTickerTexts(page) {
   const arr = [];
 
   for (let i = 0; i < count; i++) {
-    const txt = (await tickerItems.nth(i).textContent().catch(() => "")).trim();
+    const txt = ((await tickerItems.nth(i).textContent().catch(() => "")) || "").trim();
     if (txt) arr.push(txt);
   }
 
+  console.log("Detected alert ticker count:", arr.length);
   return arr;
 }
 
@@ -1147,7 +1189,8 @@ async function dumpAlertTickerTexts(page) {
 
     console.log("Opening TradingView...");
     await page.goto("https://www.tradingview.com/chart/", { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(4000);
+    await page.waitForLoadState("networkidle").catch(() => {});
+    await page.waitForTimeout(5000);
 
     const needLogin = await page.getByText(/Sign in|ログイン/i).first().isVisible().catch(() => false);
     if (needLogin) {
