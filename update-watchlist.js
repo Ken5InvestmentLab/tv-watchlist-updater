@@ -1341,7 +1341,8 @@ async function dumpAlertTickerTexts(page) {
       } catch (e) {
         console.log("Skip alert ticker dump after create:", e?.message || e);
       }
-
+    }
+    
     console.log("DONE.");
     await safeScreenshot(page, "done");
     await browser.close();
