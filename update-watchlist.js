@@ -561,38 +561,7 @@ async function isAlertsSidebarOpen(page) {
 
 async function ensureAlertsPanelOpen(page) {
   if (!(await isAlertsSidebarOpen(page))) {
-    const candidates = [
-      page.locator('button[data-name="alerts"]').first(),
-      page.locator('[data-name="alerts"]').first(),
-      page.locator('button[aria-label="Alerts"]').first(),
-      page.locator('button[aria-label="アラート"]').first(),
-      page.locator('[data-tooltip="Alerts"]').first(),
-      page.locator('[data-tooltip="アラート"]').first(),
-    ];
-
-    let opened = false;
-
-    for (let attempt = 0; attempt < 4; attempt++) {
-      for (const c of candidates) {
-        const clicked = await safeClick(c, { timeout: 6000, force: true });
-        if (!clicked) continue;
-
-        await page.waitForTimeout(1200);
-
-        if (await isAlertsSidebarOpen(page)) {
-          opened = true;
-          break;
-        }
-      }
-
-      if (opened) break;
-      await page.waitForTimeout(600);
-    }
-
-    if (!opened) {
-      await safeScreenshot(page, "alerts_sidebar_not_opened");
-      throw new Error("アラートサイドバーを開けませんでした");
-    }
+    await openAlertsPanel(page);
   }
 
   const alertsTabCandidates = [
@@ -629,7 +598,6 @@ async function ensureAlertsPanelOpen(page) {
   await safeScreenshot(page, "alerts_list_not_visible");
   throw new Error("アラート一覧タブを表示できませんでした");
 }
-
 async function getAllAlertTickerTexts(page) {
   await ensureAlertsPanelOpen(page);
 
@@ -791,6 +759,36 @@ async function closeWatchlistPromoDialog(page) {
         return true;
       }
     }
+  }
+
+  return false;
+}
+
+async function getCurrentWatchlistHeaderState(page) {
+  const btn = page.locator('button[data-name="watchlists-button"]').first();
+  await btn.waitFor({ state: "visible", timeout: 10000 });
+
+  const text = ((await btn.textContent().catch(() => "")) || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const iconCount = await btn.locator("svg").count().catch(() => 0);
+
+  return { text, iconCount };
+}
+
+async function waitForWatchlistAlertMarker(page, listName, beforeIconCount) {
+  for (let i = 0; i < 20; i++) {
+    const { text, iconCount } = await getCurrentWatchlistHeaderState(page);
+    console.log(
+      `[alert-marker] text="${text}" icons=${iconCount} before=${beforeIconCount}`
+    );
+
+    if (text.includes(listName) && iconCount > beforeIconCount) {
+      return true;
+    }
+
+    await page.waitForTimeout(1000);
   }
 
   return false;
@@ -1153,6 +1151,12 @@ async function createWatchlistAlertIfPossible(page, listName) {
   await switchWatchlistTo(page, listName);
   await page.waitForTimeout(4000);
 
+  // 作成前のヘッダー状態を保持
+  const beforeHeader = await getCurrentWatchlistHeaderState(page);
+  console.log(
+    `[before-create] watchlist="${beforeHeader.text}" icons=${beforeHeader.iconCount}`
+  );
+
   await clickAddAlertToList(page);
   await ensureAlertTargetList(page, listName);
   await selectAlertCondition(page, ALERT_CONDITION_NAME);
@@ -1162,12 +1166,40 @@ async function createWatchlistAlertIfPossible(page, listName) {
   await submitAlertDialog(page);
   await safeScreenshot(page, `after_alert_submit_${listName}`);
 
-  await assertManagedAlertCreated(page, listName);
+  // まずはウォッチリストヘッダーの時計アイコン増加で確認
+  const marked = await waitForWatchlistAlertMarker(
+    page,
+    listName,
+    beforeHeader.iconCount
+  );
+
+  if (marked) {
+    console.log(`Alert marker detected on watchlist header: ${listName}`);
+    return;
+  }
+
+  // フォールバック: Alerts一覧確認（ただしここで即死させない）
+  console.log(
+    `[fallback] header marker not detected. trying alerts panel check: ${listName}`
+  );
+
+  try {
+    await assertManagedAlertCreated(page, listName);
+    console.log(`Alert confirmed in alerts list: ${listName}`);
+    return;
+  } catch (e) {
+    await safeScreenshot(page, `alert_confirm_failed_${listName}`);
+    throw new Error(
+      `アラート作成後の確認に失敗しました: ${listName} / ${e?.message || e}`
+    );
+  }
 }
 
-async function dumpAlertTickerTexts(page) {
-  const arr = await getAllAlertTickerTexts(page);
-  console.log("Current alert ticker texts:", JSON.stringify(arr, null, 2));
+console.log("After create: alert ticker dump");
+try {
+  await dumpAlertTickerTexts(page);
+} catch (e) {
+  console.log("Skip alert ticker dump after create:", e?.message || e);
 }
 
 // ==============================
