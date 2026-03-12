@@ -546,10 +546,13 @@ async function importWatchlistFromFile(page, filePath, desiredName) {
 // ==============================
 // Alerts
 // ==============================
-async function isAlertsSidebarOpen(page) {
+async function isAlertsContentReady(page) {
   const markers = [
-    page.locator('[role="tab"]').filter({ hasText: /Alerts|Log|アラート/i }).first(),
-    page.getByText(/Alerts|Log|アラート/i).first(),
+    page.locator('[data-name="alert-item-ticker"]').first(),
+    page.locator('[data-name="alerts-manager"]').first(),
+    page.locator('[data-name="alerts-list"]').first(),
+    page.locator('[data-qa-id="alerts-list"]').first(),
+    page.getByText(/No alerts|No alerts created|アラートがありません|アラートはありません|アラートなし/i).first(),
   ];
 
   for (const marker of markers) {
@@ -559,39 +562,44 @@ async function isAlertsSidebarOpen(page) {
   return false;
 }
 
+async function isAlertsSidebarOpen(page) {
+  if (await isAlertsContentReady(page)) return true;
+
+  const selectedAlertsTab = page
+    .locator('[role="tab"][aria-selected="true"]')
+    .filter({ hasText: /^Alerts$|^アラート$/i })
+    .first();
+
+  if (await selectedAlertsTab.isVisible().catch(() => false)) return true;
+
+  return false;
+}
+
 async function ensureAlertsPanelOpen(page) {
-  if (!(await isAlertsSidebarOpen(page))) {
-    await openAlertsPanel(page);
-  }
-
-  const alertsTabCandidates = [
-    page.getByRole("tab", { name: /Alerts|アラート/i }).first(),
-    page.locator('[role="tab"]').filter({ hasText: /Alerts|アラート/i }).first(),
-    page.getByText(/Alerts|アラート/i).first(),
-  ];
-
-  for (const tab of alertsTabCandidates) {
-    if (await tab.isVisible().catch(() => false)) {
-      await safeClick(tab, { timeout: 5000, force: true }).catch(() => {});
-      await page.waitForTimeout(1000);
-      break;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (!(await isAlertsSidebarOpen(page))) {
+      await openAlertsPanel(page);
     }
-  }
 
-  const markers = [
-    page.locator('[data-name="alert-item-ticker"]').first(),
-    page.locator('[data-name="alerts-manager"]').first(),
-    page.locator('[data-name="alerts-list"]').first(),
-    page.locator('[data-qa-id="alerts-list"]').first(),
-    page.getByText(/No alerts|No alerts created|アラートがありません|アラートはありません|アラートなし/i).first(),
-  ];
+    const alertsTabCandidates = [
+      page.getByRole("tab", { name: /^Alerts$|^アラート$/i }).first(),
+      page.locator('[role="tab"]').filter({ hasText: /^Alerts$|^アラート$/i }).first(),
+    ];
 
-  for (let i = 0; i < 10; i++) {
-    for (const marker of markers) {
-      if (await marker.isVisible().catch(() => false)) {
-        return;
+    for (const tab of alertsTabCandidates) {
+      if (await tab.isVisible().catch(() => false)) {
+        await safeClick(tab, { timeout: 5000, force: true }).catch(() => {});
+        await page.waitForTimeout(1000);
+        break;
       }
     }
+
+    if (await isAlertsContentReady(page)) {
+      return;
+    }
+
+    console.log(`alerts panel not ready yet. retry=${attempt + 1}`);
+    await closeAnyMenu(page);
     await page.waitForTimeout(800);
   }
 
