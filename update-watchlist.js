@@ -598,6 +598,38 @@ async function ensureAlertsPanelOpen(page) {
   await safeScreenshot(page, "alerts_list_not_visible");
   throw new Error("アラート一覧タブを表示できませんでした");
 }
+
+async function openAlertsPanel(page) {
+  const candidates = [
+    page.locator('button[aria-label="Alerts"]').first(),
+    page.locator('button[aria-label="アラート"]').first(),
+    page.locator('button[data-tooltip="Alerts"]').first(),
+    page.locator('button[data-tooltip="アラート"]').first(),
+    page.locator('button[data-name="alerts"]').first(),
+    page.locator('[data-name="alerts"]').first(),
+  ];
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await closeAnyMenu(page);
+
+    for (const c of candidates) {
+      const clicked = await safeClick(c, { timeout: 6000, force: true });
+      if (!clicked) continue;
+
+      await page.waitForTimeout(1200);
+
+      if (await isAlertsSidebarOpen(page)) {
+        return;
+      }
+    }
+
+    await page.waitForTimeout(600);
+  }
+
+  await safeScreenshot(page, "alerts_sidebar_not_opened");
+  throw new Error("アラートサイドバーを開けませんでした");
+}
+
 async function getAllAlertTickerTexts(page) {
   await ensureAlertsPanelOpen(page);
 
@@ -1195,11 +1227,9 @@ async function createWatchlistAlertIfPossible(page, listName) {
   }
 }
 
-console.log("After create: alert ticker dump");
-try {
-  await dumpAlertTickerTexts(page);
-} catch (e) {
-  console.log("Skip alert ticker dump after create:", e?.message || e);
+async function dumpAlertTickerTexts(page) {
+  const arr = await getAllAlertTickerTexts(page);
+  console.log("Current alert ticker texts:", JSON.stringify(arr, null, 2));
 }
 
 // ==============================
@@ -1306,8 +1336,11 @@ try {
       }
 
       console.log("After create: alert ticker dump");
-      await dumpAlertTickerTexts(page);
-    }
+      try {
+        await dumpAlertTickerTexts(page);
+      } catch (e) {
+        console.log("Skip alert ticker dump after create:", e?.message || e);
+      }
 
     console.log("DONE.");
     await safeScreenshot(page, "done");
