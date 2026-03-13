@@ -546,13 +546,100 @@ async function importWatchlistFromFile(page, filePath, desiredName) {
 // ==============================
 // Alerts
 // ==============================
+async function firstVisibleClickable(locator, max = 40) {
+  const count = Math.min(await locator.count().catch(() => 0), max);
+
+  for (let i = 0; i < count; i++) {
+    const el = locator.nth(i);
+    if (!(await el.isVisible().catch(() => false))) continue;
+
+    const clickable = el
+      .locator(
+        'xpath=ancestor-or-self::*[self::button or @role="button" or @tabindex or contains(@class,"button")][1]'
+      )
+      .first();
+
+    if (await clickable.isVisible().catch(() => false)) return clickable;
+    return el;
+  }
+
+  return null;
+}
+
+async function describeLocator(locator) {
+  try {
+    return await locator.evaluate((el) => ({
+      tag: el.tagName,
+      text: (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120),
+      ariaLabel: el.getAttribute("aria-label"),
+      dataName: el.getAttribute("data-name"),
+      dataTooltip: el.getAttribute("data-tooltip"),
+      title: el.getAttribute("title"),
+      className:
+        typeof el.className === "string"
+          ? el.className.slice(0, 160)
+          : String(el.className || ""),
+    }));
+  } catch {
+    return null;
+  }
+}
+
+async function findAlertsPanelToggle(page) {
+  const attrSelector = [
+    'button[aria-label*="Alerts" i]',
+    'button[aria-label*="アラート"]',
+    '[role="button"][aria-label*="Alerts" i]',
+    '[role="button"][aria-label*="アラート"]',
+
+    'button[data-tooltip*="Alerts" i]',
+    'button[data-tooltip*="アラート"]',
+    '[role="button"][data-tooltip*="Alerts" i]',
+    '[role="button"][data-tooltip*="アラート"]',
+
+    'button[title*="Alerts" i]',
+    'button[title*="アラート"]',
+    '[role="button"][title*="Alerts" i]',
+    '[role="button"][title*="アラート"]',
+
+    'button[data-name*="alert" i]',
+    '[role="button"][data-name*="alert" i]',
+    '[data-name*="alert" i]',
+    '[data-qa-id*="alert" i]',
+  ].join(", ");
+
+  const direct = await firstVisibleClickable(page.locator(attrSelector), 80);
+  if (direct) return direct;
+
+  const textCandidates = [
+    page.getByRole("button", { name: /Alerts|アラート/i }),
+    page.locator('[role="tab"]').filter({ hasText: /^Alerts$|^アラート$/i }),
+    page
+      .locator('button, [role="button"], [tabindex]')
+      .filter({ hasText: /^Alerts$|^アラート$/i }),
+  ];
+
+  for (const candidate of textCandidates) {
+    const el = await firstVisibleClickable(candidate, 40);
+    if (el) return el;
+  }
+
+  return null;
+}
+
 async function isAlertsContentReady(page) {
   const markers = [
     page.locator('[data-name="alert-item-ticker"]').first(),
     page.locator('[data-name="alerts-manager"]').first(),
     page.locator('[data-name="alerts-list"]').first(),
     page.locator('[data-qa-id="alerts-list"]').first(),
-    page.getByText(/No alerts|No alerts created|アラートがありません|アラートはありません|アラートなし/i).first(),
+    page.locator('[data-name*="alert" i]').first(),
+    page.locator('[data-qa-id*="alert" i]').first(),
+    page
+      .getByText(
+        /No alerts|No alerts created|アラートがありません|アラートはありません|アラートなし/i
+      )
+      .first(),
   ];
 
   for (const marker of markers) {
@@ -575,6 +662,64 @@ async function isAlertsSidebarOpen(page) {
   return false;
 }
 
+async function openAlertsPanel(page) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    await closeAnyMenu(page);
+
+    const toggle = await findAlertsPanelToggle(page);
+    if (toggle) {
+      const meta = await describeLocator(toggle);
+      if (meta) {
+        console.log("alerts toggle candidate:", JSON.stringify(meta));
+      }
+
+      const clicked = await clickBestEffort(toggle, 8000);
+      if (clicked) {
+        await page.waitForTimeout(1500);
+        if (await isAlertsSidebarOpen(page)) {
+          return;
+        }
+      }
+    } else {
+      console.log(`alerts toggle not found. retry=${attempt + 1}`);
+    }
+
+    const alertTab = await firstVisibleClickable(
+      page
+        .locator('[role="tab"], button, [role="button"], [tabindex]')
+        .filter({ hasText: /^Alerts$|^アラート$/i }),
+      30
+    );
+
+    if (alertTab) {
+      const meta = await describeLocator(alertTab);
+      if (meta) {
+        console.log("alerts tab fallback:", JSON.stringify(meta));
+      }
+
+      const clicked = await clickBestEffort(alertTab, 8000);
+      if (clicked) {
+        await page.waitForTimeout(1500);
+        if (await isAlertsSidebarOpen(page)) {
+          return;
+        }
+      }
+    }
+
+    if (attempt === 2) {
+      console.log("alerts panel still not opening. refreshing page once...");
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForLoadState("networkidle").catch(() => {});
+      await page.waitForTimeout(4000);
+    } else {
+      await page.waitForTimeout(1000);
+    }
+  }
+
+  await safeScreenshot(page, "alerts_sidebar_not_opened");
+  throw new Error("アラートサイドバーを開けませんでした");
+}
+
 async function ensureAlertsPanelOpen(page) {
   for (let attempt = 0; attempt < 4; attempt++) {
     if (!(await isAlertsSidebarOpen(page))) {
@@ -584,11 +729,15 @@ async function ensureAlertsPanelOpen(page) {
     const alertsTabCandidates = [
       page.getByRole("tab", { name: /^Alerts$|^アラート$/i }).first(),
       page.locator('[role="tab"]').filter({ hasText: /^Alerts$|^アラート$/i }).first(),
+      page
+        .locator('button, [role="button"], [tabindex]')
+        .filter({ hasText: /^Alerts$|^アラート$/i })
+        .first(),
     ];
 
     for (const tab of alertsTabCandidates) {
       if (await tab.isVisible().catch(() => false)) {
-        await safeClick(tab, { timeout: 5000, force: true }).catch(() => {});
+        await safeClick(tab, { timeout: 5000, force: true });
         await page.waitForTimeout(1000);
         break;
       }
@@ -605,37 +754,6 @@ async function ensureAlertsPanelOpen(page) {
 
   await safeScreenshot(page, "alerts_list_not_visible");
   throw new Error("アラート一覧タブを表示できませんでした");
-}
-
-async function openAlertsPanel(page) {
-  const candidates = [
-    page.locator('button[aria-label="Alerts"]').first(),
-    page.locator('button[aria-label="アラート"]').first(),
-    page.locator('button[data-tooltip="Alerts"]').first(),
-    page.locator('button[data-tooltip="アラート"]').first(),
-    page.locator('button[data-name="alerts"]').first(),
-    page.locator('[data-name="alerts"]').first(),
-  ];
-
-  for (let attempt = 0; attempt < 4; attempt++) {
-    await closeAnyMenu(page);
-
-    for (const c of candidates) {
-      const clicked = await safeClick(c, { timeout: 6000, force: true });
-      if (!clicked) continue;
-
-      await page.waitForTimeout(1200);
-
-      if (await isAlertsSidebarOpen(page)) {
-        return;
-      }
-    }
-
-    await page.waitForTimeout(600);
-  }
-
-  await safeScreenshot(page, "alerts_sidebar_not_opened");
-  throw new Error("アラートサイドバーを開けませんでした");
 }
 
 async function getAllAlertTickerTexts(page) {
@@ -1287,7 +1405,10 @@ async function dumpAlertTickerTexts(page) {
     });
 
     const storageState = JSON.parse(TRADINGVIEW_STORAGE_STATE);
-    context = await browser.newContext({ storageState });
+    context = await browser.newContext({
+      storageState,
+      viewport: { width: 1600, height: 1200 },
+    });
     page = await context.newPage();
 
     page.setDefaultTimeout(STEP_TIMEOUT);
@@ -1296,7 +1417,7 @@ async function dumpAlertTickerTexts(page) {
     console.log("Opening TradingView...");
     await page.goto("https://www.tradingview.com/chart/", { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle").catch(() => {});
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(8000);
 
     const needLogin = await page.getByText(/Sign in|ログイン/i).first().isVisible().catch(() => false);
     if (needLogin) {
