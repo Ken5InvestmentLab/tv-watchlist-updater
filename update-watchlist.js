@@ -967,21 +967,15 @@ function compactTvText(s = "") {
 }
 
 function isTarget4hText(s = "") {
-  const raw = String(s).normalize("NFKC").toLowerCase();
-  const compact = raw.replace(/[\s\u00A0\u2000-\u200B]+/g, "");
-
+  const t = compactTvText(s);
   return (
-    compact === "4h" ||
-    compact === "4hour" ||
-    compact === "4hours" ||
-    compact === "240" ||
-    compact === "4時間" ||
-
-    // 複合文字列にも対応
-    raw.includes("4h") ||
-    raw.includes("4 hour") ||
-    raw.includes("4 hours") ||
-    raw.includes("4時間")
+    t === "4h" ||
+    t === "4hr" ||
+    t === "4hrs" ||
+    t === "4hour" ||
+    t === "4hours" ||
+    t === "240" ||
+    t === "4時間"
   );
 }
 
@@ -1018,19 +1012,10 @@ async function collectVisibleTexts(locator, max = 120) {
 
   for (let i = 0; i < count; i++) {
     const el = locator.nth(i);
-    const visible = await el.isVisible().catch(() => false);
-    if (!visible) continue;
-
-    const txt = await el.evaluate((node) => {
-      const text = (node.innerText || node.textContent || "").trim();
-      const aria = node.getAttribute?.("aria-label") || "";
-      const tooltip = node.getAttribute?.("data-tooltip") || "";
-      const value = node.getAttribute?.("data-value") || "";
-      return [text, aria, tooltip, value].filter(Boolean).join(" | ");
-    }).catch(() => "");
-
-    const norm = txt.replace(/\s+/g, " ").trim();
-    if (norm) out.push(norm);
+    if (!(await el.isVisible().catch(() => false))) continue;
+    const txt = await readLocatorTextWithAttrs(el);
+    if (!txt) continue;
+    out.push(txt);
   }
 
   return [...new Set(out)];
@@ -1178,87 +1163,77 @@ async function expandHoursSectionIfNeeded(page, menuRoot) {
 }
 
 async function select4hFromMenu(page, menuRoot) {
-  // 1) あなたがくれたHTML構造を最優先
-  const priorityLocators = [
+  const directCandidates = [
     menuRoot.locator('[data-role="menuitem"][data-value="240"]').first(),
     menuRoot.locator('[role="row"][data-value="240"]').first(),
     menuRoot.locator('[data-value="240"]').first(),
-    menuRoot.locator('text=/^4\\s*時間$|^4\\s*hours?$|^4h$/i').first(),
+    menuRoot.locator('[data-role="menuitem"]').filter({ hasText: /^4 ?時間$|^4 ?hours?$|^4h$/i }).first(),
+    menuRoot.locator('[role="row"]').filter({ hasText: /^4 ?時間$|^4 ?hours?$|^4h$/i }).first(),
   ];
 
-  for (const loc of priorityLocators) {
-    const count = await loc.count().catch(() => 0);
-    if (!count) continue;
-    const visible = await loc.isVisible().catch(() => false);
-    if (!visible) continue;
-
-    const debugText = await loc.innerText().catch(() => "");
-    console.log(`[timeframe] clicking priority 4h candidate: "${debugText}"`);
-
-    await loc.click({ timeout: 3000 }).catch(async () => {
-      await loc.evaluate((el) => el.click()).catch(() => {});
-    });
-    return true;
+  for (const c of directCandidates) {
+    if (!(await c.count().catch(() => 0))) continue;
+    if (!(await c.isVisible().catch(() => false))) continue;
+    const meta = await describeLocator(c);
+    if (meta) {
+      console.log("[timeframe] direct 4H candidate:", JSON.stringify(meta));
+    }
+    const clicked = await clickBestEffort(c, 4000);
+    if (clicked) return true;
   }
 
-  // 2) 一般探索（row / menuitem を広く拾う）
-  let items = menuRoot.locator(
-    [
-      '[data-role="menuitem"]',
-      '[role="row"]',
-      '[role="option"]',
-      'button',
-      '[role="button"]',
-      'div'
-    ].join(', ')
-  );
+  const scanSelectors = [
+    '[data-role="menuitem"]',
+    '[role="row"]',
+    '[role="option"]',
+    'button',
+    'div',
+    'span',
+  ].join(', ');
 
+  let items = menuRoot.locator(scanSelectors);
   let count = Math.min(await items.count().catch(() => 0), 400);
 
   for (let i = 0; i < count; i++) {
     const el = items.nth(i);
-    const visible = await el.isVisible().catch(() => false);
-    if (!visible) continue;
-
-    const meta = await el.evaluate((node) => ({
-      text: (node.innerText || node.textContent || "").trim(),
-      aria: node.getAttribute?.("aria-label") || "",
-      tooltip: node.getAttribute?.("data-tooltip") || "",
-      value: node.getAttribute?.("data-value") || "",
-      role: node.getAttribute?.("role") || "",
-      dataRole: node.getAttribute?.("data-role") || "",
-    })).catch(() => null);
-
-    if (!meta) continue;
-
-    const joined = [meta.text, meta.aria, meta.tooltip, meta.value].join(" | ");
-    if (meta.value === "240" || isTarget4hText(joined)) {
-      console.log("[timeframe] clicking fallback 4h candidate:", meta);
-
-      await el.click({ timeout: 3000 }).catch(async () => {
-        await el.evaluate((node) => node.click()).catch(() => {});
-      });
-      return true;
-    }
+    if (!(await el.isVisible().catch(() => false))) continue;
+    const txt = await readLocatorTextWithAttrs(el);
+    if (!isTarget4hText(txt)) continue;
+    const clicked = await clickBestEffort(el, 4000);
+    if (clicked) return true;
   }
 
-  // 3) スクロール探索
-  for (let r = 0; r < 8; r++) {
+  await expandHoursSectionIfNeeded(page, menuRoot);
+  await page.waitForTimeout(250);
+
+  items = menuRoot.locator(scanSelectors);
+  count = Math.min(await items.count().catch(() => 0), 400);
+
+  for (let i = 0; i < count; i++) {
+    const el = items.nth(i);
+    if (!(await el.isVisible().catch(() => false))) continue;
+    const txt = await readLocatorTextWithAttrs(el);
+    if (!isTarget4hText(txt)) continue;
+    const clicked = await clickBestEffort(el, 4000);
+    if (clicked) return true;
+  }
+
+  for (let r = 0; r < 10; r++) {
     await menuRoot.evaluate((el) => {
-      el.scrollTop = (el.scrollTop || 0) + 260;
+      el.scrollTop = (el.scrollTop || 0) + 240;
     }).catch(() => {});
     await page.waitForTimeout(200);
 
-    const direct = menuRoot.locator('[data-role="menuitem"][data-value="240"], [role="row"][data-value="240"]').first();
-    if (await direct.count().catch(() => 0)) {
-      if (await direct.isVisible().catch(() => false)) {
-        const t = await direct.innerText().catch(() => "");
-        console.log(`[timeframe] clicking scrolled 4h candidate: "${t}"`);
-        await direct.click({ timeout: 3000 }).catch(async () => {
-          await direct.evaluate((el) => el.click()).catch(() => {});
-        });
-        return true;
-      }
+    items = menuRoot.locator(scanSelectors);
+    count = Math.min(await items.count().catch(() => 0), 400);
+
+    for (let i = 0; i < count; i++) {
+      const el = items.nth(i);
+      if (!(await el.isVisible().catch(() => false))) continue;
+      const txt = await readLocatorTextWithAttrs(el);
+      if (!isTarget4hText(txt)) continue;
+      const clicked = await clickBestEffort(el, 4000);
+      if (clicked) return true;
     }
   }
 
@@ -1320,10 +1295,11 @@ async function ensureChartTimeframe(page, targetLabel = "4 時間") {
 }
 
 async function getAlertIntervalButton(dialog) {
+  if (!dialog) return null;
+
   const candidates = [
     dialog.locator('[role="button"], [role="combobox"], button').filter({ hasText: /Same as chart|チャートと同一|チャートと同じ/i }).first(),
     dialog.locator('[role="button"], [role="combobox"], button').filter({ hasText: /4 ?時間|4 ?hours?|4h|240/i }).first(),
-    dialog.locator('[data-qa-id="resolution-dropdown-item"]').first(),
     dialog.locator('button[aria-haspopup="menu"]').filter({ hasText: /4 ?時間|4 ?hours?|4h|Same as chart|チャート/i }).first(),
   ];
 
@@ -1333,7 +1309,7 @@ async function getAlertIntervalButton(dialog) {
   }
 
   const controls = dialog.locator('[role="button"], [role="combobox"], button');
-  const count = Math.min(await controls.count().catch(() => 0), 80);
+  const count = Math.min(await controls.count().catch(() => 0), 120);
 
   for (let i = 0; i < count; i++) {
     const el = controls.nth(i);
@@ -1349,18 +1325,22 @@ async function logAlertIntervalState(page, tag = 'alert-interval') {
   const dialog = await getAlertDialogRoot(page);
   if (!dialog) {
     console.log(`[${tag}] alert dialog not found`);
+    await safeScreenshot(page, `${tag}_dialog_not_found`);
     return;
   }
 
   const chartTf = await getCurrentChartTimeframeText(page);
   console.log(`[${tag}] current chart timeframe: "${chartTf}"`);
 
-  const buttonTexts = await collectVisibleTexts(dialog.locator('button, [role="button"], [role="combobox"]'), 80);
+  const dialogText = ((await dialog.textContent().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+  console.log(`[${tag}] dialog text preview:`, dialogText.slice(0, 400));
+
+  const buttonTexts = await collectVisibleTexts(dialog.locator('button, [role="button"], [role="combobox"]'), 120);
   console.log(`[${tag}] visible dialog button texts:`, buttonTexts);
 
   const intervalBtn = await getAlertIntervalButton(dialog);
   if (!intervalBtn) {
-    console.log(`[${tag}] interval button not found`);
+    console.log(`[${tag}] interval button not found inside alert dialog`);
     await safeScreenshot(page, `${tag}_interval_button_not_found`);
     return;
   }
@@ -1368,40 +1348,37 @@ async function logAlertIntervalState(page, tag = 'alert-interval') {
   const intervalText = await readLocatorTextWithAttrs(intervalBtn);
   console.log(`[${tag}] interval button text: "${intervalText}"`);
 
-  const opened = await clickBestEffort(intervalBtn, 4000);
-  if (opened) {
-    await page.waitForTimeout(250);
-    const root = await findTimeframeMenuRoot(page);
-    if (root) {
-      const optionTexts = await collectVisibleTexts(
-        root.locator('[data-role="menuitem"], [role="row"], [role="option"], button, div, span'),
-        200
-      );
-      console.log(`[${tag}] visible interval options:`, optionTexts);
-    }
-    await closeAnyMenu(page);
-  }
-
   await safeScreenshot(page, tag);
 }
 
 async function verifyAlertIntervalIsSameAsChart(page) {
   const dialog = await getAlertDialogRoot(page);
-  const intervalBtn = await getAlertIntervalButton(dialog);
+  if (!dialog) {
+    await safeScreenshot(page, 'alert_interval_dialog_missing');
+    throw new Error('Alert ダイアログが途中で閉じました');
+  }
 
+  const intervalBtn = await getAlertIntervalButton(dialog);
   if (!intervalBtn) {
     await logAlertIntervalState(page, 'alert_interval_missing');
-    throw new Error("Alert の Interval ボタンが見つかりませんでした");
+    throw new Error('Alert の Interval ボタンが見つかりませんでした');
   }
 
   const txt = await readLocatorTextWithAttrs(intervalBtn);
+  const chartTf = await getCurrentChartTimeframeText(page);
+
   if (isSameAsChartText(txt)) {
     console.log(`[alert] interval is Same as chart: "${txt}"`);
     return;
   }
 
+  if (isTarget4hText(txt) && isTarget4hText(chartTf)) {
+    console.log(`[alert] interval text is explicit 4H while chart is 4H. accepted: "${txt}"`);
+    return;
+  }
+
   await logAlertIntervalState(page, 'alert_interval_not_same_as_chart');
-  throw new Error(`Alert の Interval が 'Same as chart' ではありませんでした: ${txt}`);
+  throw new Error(`Alert の Interval が想定外でした: ${txt}`);
 }
 
 // ==============================
@@ -1449,13 +1426,19 @@ async function clickAddAlertToList(page) {
 }
 
 async function selectAlertCondition(page, conditionName) {
-  console.log("Selecting alert condition:", conditionName);
+  console.log('Selecting alert condition:', conditionName);
+
+  const dialog = await getAlertDialogRoot(page);
+  if (!dialog) {
+    await safeScreenshot(page, 'alert_dialog_missing_before_condition_select');
+    throw new Error('条件選択前に Alert ダイアログが見つかりませんでした');
+  }
 
   const dropdownCandidates = [
-    page.locator('[data-qa-id="main-series-select-title"]').first(),
-    page.locator('span').filter({ hasText: /^Price$|^価格$/ }).first(),
-    page.locator('div').filter({ hasText: /^Price$|^価格$/ }).last(),
-    page.getByText(/^Condition$|^条件$/).locator('~ div').locator('[role="button"], [role="combobox"]').first(),
+    dialog.locator('[data-qa-id="main-series-select-title"]').first(),
+    dialog.locator('[role="button"], [role="combobox"], button').filter({ hasText: /^Price$|^価格$/ }).first(),
+    dialog.locator('span').filter({ hasText: /^Price$|^価格$/ }).first(),
+    dialog.locator('div').filter({ hasText: /^Price$|^価格$/ }).last(),
   ];
 
   let opened = false;
@@ -1469,19 +1452,23 @@ async function selectAlertCondition(page, conditionName) {
   }
 
   if (!opened) {
-    await clickBestEffort(page.getByText(/^Price$|^価格$/).first(), 4000);
+    await safeScreenshot(page, 'alert_condition_dropdown_not_opened');
+    throw new Error('アラート条件ドロップダウンを開けませんでした');
   }
 
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(800);
 
-  const shortName = conditionName.split("(")[0].trim();
-  console.log("Looking for option matching:", shortName);
+  const shortName = conditionName.split('(')[0].trim();
+  console.log('Looking for option matching:', shortName);
 
   const optionCandidates = [
     page.locator('[role="option"]').filter({ hasText: conditionName }).first(),
     page.locator('[role="option"]').filter({ hasText: shortName }).first(),
+    page.locator('[data-role="menuitem"]').filter({ hasText: conditionName }).first(),
+    page.locator('[data-role="menuitem"]').filter({ hasText: shortName }).first(),
+    page.locator('div[role="row"]').filter({ hasText: shortName }).first(),
     page.locator('span').filter({ hasText: shortName }).first(),
-    page.getByText(shortName).first(),
+    page.getByText(shortName, { exact: false }).first(),
   ];
 
   let selected = false;
@@ -1495,11 +1482,17 @@ async function selectAlertCondition(page, conditionName) {
   }
 
   if (!selected) {
-    await safeScreenshot(page, "alert_condition_not_found");
+    await safeScreenshot(page, 'alert_condition_not_found');
     throw new Error(`アラート条件が見つかりませんでした: ${conditionName} (短縮検索: ${shortName})`);
   }
 
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(700);
+
+  const dialogAfter = await getAlertDialogRoot(page);
+  if (!dialogAfter) {
+    await safeScreenshot(page, 'alert_dialog_disappeared_after_condition_select');
+    throw new Error('条件選択後に Alert ダイアログが閉じました');
+  }
 }
 
 async function selectAlertResolution(page, label) {
@@ -1508,18 +1501,26 @@ async function selectAlertResolution(page, label) {
 }
 
 async function getAlertDialogRoot(page) {
-  const byTitle = page
-    .getByText(/Create alert on|アラートを作成/i)
-    .first()
-    .locator('xpath=ancestor::*[@role="dialog" or contains(@class,"dialog") or contains(@class,"modal")][1]')
-    .first();
+  const roleDialogs = page.locator('[role="dialog"]');
+  const count = Math.min(await roleDialogs.count().catch(() => 0), 10);
 
-  if (await byTitle.isVisible().catch(() => false)) return byTitle;
+  for (let i = count - 1; i >= 0; i--) {
+    const d = roleDialogs.nth(i);
+    if (!(await d.isVisible().catch(() => false))) continue;
 
-  const roleDialog = page.locator('[role="dialog"]').last();
-  if (await roleDialog.isVisible().catch(() => false)) return roleDialog;
+    const txt = ((await d.textContent().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+    if (/Create alert on|アラートを作成|Open-ended alert|Once only|Toasts|Webhook|Cancel|Create/i.test(txt)) {
+      return d;
+    }
+  }
 
-  return page.locator("body");
+  const titled = page.getByText(/Create alert on|アラートを作成/i).first();
+  if (await titled.isVisible().catch(() => false)) {
+    const parent = titled.locator('xpath=ancestor::*[@role="dialog" or contains(@class,"dialog") or contains(@class,"modal")][1]').first();
+    if (await parent.isVisible().catch(() => false)) return parent;
+  }
+
+  return null;
 }
 
 async function ensureAlertTargetList(page, listName) {
