@@ -1114,15 +1114,13 @@ async function openChartTimeframeMenu(page) {
   return false;
 }
 
-async function findTimeframeMenuRoots(page) {
+async function findTimeframeMenuRoot(page) {
   const selectors = [
     '[role="menu"]',
     '[role="listbox"]',
     'div[data-name="menu-inner"]',
     'div[class*="menu"]',
   ];
-
-  const scored = [];
 
   for (const sel of selectors) {
     const loc = page.locator(sel);
@@ -1134,37 +1132,15 @@ async function findTimeframeMenuRoots(page) {
 
       const text = normalizeTvText(await root.textContent().catch(() => ""));
       const has240 = (await root.locator('[data-value="240"]').count().catch(() => 0)) > 0;
-      const rowCount = await root
-        .locator('[data-role="menuitem"], [role="row"], [role="option"]')
-        .count()
-        .catch(() => 0);
+      const looksLikeTfMenu =
+        has240 ||
+        /seconds|minutes|hours|days|weeks|months|秒|分|時間|日|週|月/.test(text);
 
-      const hasTfWords = /seconds|minutes|hours|days|weeks|months|秒|分|時間|日|週|月/.test(text);
-      const has4hText = /\b4\s*h(?:ours?)?\b|4\s*時間/.test(text);
-      const hasAddCustom = /add\s+custom\s+interval|カスタム/.test(text);
-      const hasOnlyFavoriteHints = /add\s+to\s+favorites/.test(text) && !hasTfWords && !has4hText;
-
-      let score = 0;
-      if (has240) score += 8;
-      if (has4hText) score += 6;
-      if (hasTfWords) score += 4;
-      if (hasAddCustom) score += 3;
-      score += Math.min(rowCount, 8);
-      if (hasOnlyFavoriteHints) score -= 6;
-
-      if (score > 0) {
-        scored.push({ root, score });
-      }
+      if (looksLikeTfMenu) return root;
     }
   }
 
-  scored.sort((a, b) => b.score - a.score);
-  return scored.map((x) => x.root);
-}
-
-async function findTimeframeMenuRoot(page) {
-  const roots = await findTimeframeMenuRoots(page);
-  return roots.length ? roots[0] : null;
+  return null;
 }
 
 async function expandHoursSectionIfNeeded(page, menuRoot) {
@@ -1295,16 +1271,10 @@ async function ensureChartTimeframe(page, targetLabel = "4 時間") {
 
   await logChartTimeframeMenuState(page, 'chart-timeframe-opened');
 
-  const roots = await findTimeframeMenuRoots(page);
-  if (!roots.length) {
+  const root = await findTimeframeMenuRoot(page);
+  if (!root) {
     await safeScreenshot(page, 'chart_timeframe_menu_not_found');
     throw new Error("チャート時間足メニューが見つかりませんでした");
-  }
-
-  let ok = false;
-  for (const root of roots) {
-    ok = await select4hFromMenu(page, root);
-    if (ok) break;
   }
 
   const ok = await select4hFromMenu(page, root);
