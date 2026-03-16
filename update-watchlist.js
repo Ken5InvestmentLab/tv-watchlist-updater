@@ -967,15 +967,21 @@ function compactTvText(s = "") {
 }
 
 function isTarget4hText(s = "") {
-  const t = compactTvText(s);
+  const raw = String(s).normalize("NFKC").toLowerCase();
+  const compact = raw.replace(/[\s\u00A0\u2000-\u200B]+/g, "");
+
   return (
-    t === "4h" ||
-    t === "4hr" ||
-    t === "4hrs" ||
-    t === "4hour" ||
-    t === "4hours" ||
-    t === "240" ||
-    t === "4時間"
+    compact === "4h" ||
+    compact === "4hour" ||
+    compact === "4hours" ||
+    compact === "240" ||
+    compact === "4時間" ||
+
+    // 複合文字列にも対応
+    raw.includes("4h") ||
+    raw.includes("4 hour") ||
+    raw.includes("4 hours") ||
+    raw.includes("4時間")
   );
 }
 
@@ -1012,10 +1018,19 @@ async function collectVisibleTexts(locator, max = 120) {
 
   for (let i = 0; i < count; i++) {
     const el = locator.nth(i);
-    if (!(await el.isVisible().catch(() => false))) continue;
-    const txt = await readLocatorTextWithAttrs(el);
-    if (!txt) continue;
-    out.push(txt);
+    const visible = await el.isVisible().catch(() => false);
+    if (!visible) continue;
+
+    const txt = await el.evaluate((node) => {
+      const text = (node.innerText || node.textContent || "").trim();
+      const aria = node.getAttribute?.("aria-label") || "";
+      const tooltip = node.getAttribute?.("data-tooltip") || "";
+      const value = node.getAttribute?.("data-value") || "";
+      return [text, aria, tooltip, value].filter(Boolean).join(" | ");
+    }).catch(() => "");
+
+    const norm = txt.replace(/\s+/g, " ").trim();
+    if (norm) out.push(norm);
   }
 
   return [...new Set(out)];
@@ -1163,77 +1178,87 @@ async function expandHoursSectionIfNeeded(page, menuRoot) {
 }
 
 async function select4hFromMenu(page, menuRoot) {
-  const directCandidates = [
+  // 1) あなたがくれたHTML構造を最優先
+  const priorityLocators = [
     menuRoot.locator('[data-role="menuitem"][data-value="240"]').first(),
     menuRoot.locator('[role="row"][data-value="240"]').first(),
     menuRoot.locator('[data-value="240"]').first(),
-    menuRoot.locator('[data-role="menuitem"]').filter({ hasText: /^4 ?時間$|^4 ?hours?$|^4h$/i }).first(),
-    menuRoot.locator('[role="row"]').filter({ hasText: /^4 ?時間$|^4 ?hours?$|^4h$/i }).first(),
+    menuRoot.locator('text=/^4\\s*時間$|^4\\s*hours?$|^4h$/i').first(),
   ];
 
-  for (const c of directCandidates) {
-    if (!(await c.count().catch(() => 0))) continue;
-    if (!(await c.isVisible().catch(() => false))) continue;
-    const meta = await describeLocator(c);
-    if (meta) {
-      console.log("[timeframe] direct 4H candidate:", JSON.stringify(meta));
-    }
-    const clicked = await clickBestEffort(c, 4000);
-    if (clicked) return true;
+  for (const loc of priorityLocators) {
+    const count = await loc.count().catch(() => 0);
+    if (!count) continue;
+    const visible = await loc.isVisible().catch(() => false);
+    if (!visible) continue;
+
+    const debugText = await loc.innerText().catch(() => "");
+    console.log(`[timeframe] clicking priority 4h candidate: "${debugText}"`);
+
+    await loc.click({ timeout: 3000 }).catch(async () => {
+      await loc.evaluate((el) => el.click()).catch(() => {});
+    });
+    return true;
   }
 
-  const scanSelectors = [
-    '[data-role="menuitem"]',
-    '[role="row"]',
-    '[role="option"]',
-    'button',
-    'div',
-    'span',
-  ].join(', ');
+  // 2) 一般探索（row / menuitem を広く拾う）
+  let items = menuRoot.locator(
+    [
+      '[data-role="menuitem"]',
+      '[role="row"]',
+      '[role="option"]',
+      'button',
+      '[role="button"]',
+      'div'
+    ].join(', ')
+  );
 
-  let items = menuRoot.locator(scanSelectors);
   let count = Math.min(await items.count().catch(() => 0), 400);
 
   for (let i = 0; i < count; i++) {
     const el = items.nth(i);
-    if (!(await el.isVisible().catch(() => false))) continue;
-    const txt = await readLocatorTextWithAttrs(el);
-    if (!isTarget4hText(txt)) continue;
-    const clicked = await clickBestEffort(el, 4000);
-    if (clicked) return true;
+    const visible = await el.isVisible().catch(() => false);
+    if (!visible) continue;
+
+    const meta = await el.evaluate((node) => ({
+      text: (node.innerText || node.textContent || "").trim(),
+      aria: node.getAttribute?.("aria-label") || "",
+      tooltip: node.getAttribute?.("data-tooltip") || "",
+      value: node.getAttribute?.("data-value") || "",
+      role: node.getAttribute?.("role") || "",
+      dataRole: node.getAttribute?.("data-role") || "",
+    })).catch(() => null);
+
+    if (!meta) continue;
+
+    const joined = [meta.text, meta.aria, meta.tooltip, meta.value].join(" | ");
+    if (meta.value === "240" || isTarget4hText(joined)) {
+      console.log("[timeframe] clicking fallback 4h candidate:", meta);
+
+      await el.click({ timeout: 3000 }).catch(async () => {
+        await el.evaluate((node) => node.click()).catch(() => {});
+      });
+      return true;
+    }
   }
 
-  await expandHoursSectionIfNeeded(page, menuRoot);
-  await page.waitForTimeout(250);
-
-  items = menuRoot.locator(scanSelectors);
-  count = Math.min(await items.count().catch(() => 0), 400);
-
-  for (let i = 0; i < count; i++) {
-    const el = items.nth(i);
-    if (!(await el.isVisible().catch(() => false))) continue;
-    const txt = await readLocatorTextWithAttrs(el);
-    if (!isTarget4hText(txt)) continue;
-    const clicked = await clickBestEffort(el, 4000);
-    if (clicked) return true;
-  }
-
-  for (let r = 0; r < 10; r++) {
+  // 3) スクロール探索
+  for (let r = 0; r < 8; r++) {
     await menuRoot.evaluate((el) => {
-      el.scrollTop = (el.scrollTop || 0) + 240;
+      el.scrollTop = (el.scrollTop || 0) + 260;
     }).catch(() => {});
     await page.waitForTimeout(200);
 
-    items = menuRoot.locator(scanSelectors);
-    count = Math.min(await items.count().catch(() => 0), 400);
-
-    for (let i = 0; i < count; i++) {
-      const el = items.nth(i);
-      if (!(await el.isVisible().catch(() => false))) continue;
-      const txt = await readLocatorTextWithAttrs(el);
-      if (!isTarget4hText(txt)) continue;
-      const clicked = await clickBestEffort(el, 4000);
-      if (clicked) return true;
+    const direct = menuRoot.locator('[data-role="menuitem"][data-value="240"], [role="row"][data-value="240"]').first();
+    if (await direct.count().catch(() => 0)) {
+      if (await direct.isVisible().catch(() => false)) {
+        const t = await direct.innerText().catch(() => "");
+        console.log(`[timeframe] clicking scrolled 4h candidate: "${t}"`);
+        await direct.click({ timeout: 3000 }).catch(async () => {
+          await direct.evaluate((el) => el.click()).catch(() => {});
+        });
+        return true;
+      }
     }
   }
 
