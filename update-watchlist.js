@@ -975,7 +975,10 @@ function isTarget4hText(s = "") {
     t === "4hour" ||
     t === "4hours" ||
     t === "240" ||
-    t === "4時間"
+    t === "4時間" ||
+    // ↓ 追加: "4h | 4h | Change interval" → "4h|4h|changeinterval" のような複合テキストを許容
+    t.startsWith("4h|") ||
+    t.startsWith("4時間|")
   );
 }
 
@@ -1116,27 +1119,34 @@ async function openChartTimeframeMenu(page) {
 
 async function findTimeframeMenuRoot(page) {
   const selectors = [
-    '[role="menu"]',
-    '[role="listbox"]',
-    'div[data-name="menu-inner"]',
-    'div[class*="menu"]',
+    '[role="menu"]', '[role="listbox"]',
+    'div[data-name="menu-inner"]', 'div[class*="menu"]',
   ];
 
+  // 第1優先: [data-value="240"] を含む要素 (= 4h選択肢が存在する本体ドロップダウン)
   for (const sel of selectors) {
     const loc = page.locator(sel);
     const count = Math.min(await loc.count().catch(() => 0), 20);
+    for (let i = 0; i < count; i++) {
+      const root = loc.nth(i);
+      if (!(await root.isVisible().catch(() => false))) continue;
+      const has240 = (await root.locator('[data-value="240"]').count().catch(() => 0)) > 0;
+      if (has240) return root;
+    }
+  }
 
+  // 第2優先: "hours/時間" と "days/日" の両方を含む要素 (お気に入りバーの誤検知防止)
+  for (const sel of selectors) {
+    const loc = page.locator(sel);
+    const count = Math.min(await loc.count().catch(() => 0), 20);
     for (let i = count - 1; i >= 0; i--) {
       const root = loc.nth(i);
       if (!(await root.isVisible().catch(() => false))) continue;
-
       const text = normalizeTvText(await root.textContent().catch(() => ""));
+      const hasHoursAndDays =
+        /hours|時間/.test(text) && /days|日/.test(text);
       const has240 = (await root.locator('[data-value="240"]').count().catch(() => 0)) > 0;
-      const looksLikeTfMenu =
-        has240 ||
-        /seconds|minutes|hours|days|weeks|months|秒|分|時間|日|週|月/.test(text);
-
-      if (looksLikeTfMenu) return root;
+      if (has240 || hasHoursAndDays) return root;
     }
   }
 
