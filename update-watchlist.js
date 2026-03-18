@@ -1087,13 +1087,20 @@ async function openChartTimeframeMenu(page) {
       console.log("[timeframe] menu button candidate:", JSON.stringify(meta));
     }
 
+    // 変更後
     const clicked = await clickBestEffort(c, 4000);
     if (!clicked) continue;
 
-    await page.waitForTimeout(300);
+    // メニューアニメーション完了を待つ（300ms → 1200ms）
+    await page.waitForTimeout(1200);
     const root = await findTimeframeMenuRoot(page);
     if (root) return true;
-  }
+
+    // 1200ms でも見つからない場合は更に待って再試行
+    await page.waitForTimeout(800);
+    const rootRetry = await findTimeframeMenuRoot(page);
+    if (rootRetry) return rootRetry;
+    }
 
   const buttons = page.locator('button[aria-haspopup="menu"], header button, button');
   const count = Math.min(await buttons.count().catch(() => 0), 200);
@@ -1109,7 +1116,7 @@ async function openChartTimeframeMenu(page) {
     const clicked = await clickBestEffort(el, 4000);
     if (!clicked) continue;
 
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(1200);
     const root = await findTimeframeMenuRoot(page);
     if (root) return true;
   }
@@ -1123,7 +1130,7 @@ async function findTimeframeMenuRoot(page) {
     'div[data-name="menu-inner"]', 'div[class*="menu"]',
   ];
 
-  // 第1優先: [data-value="240"] を含む要素 (= 4h選択肢が存在する本体ドロップダウン)
+  // 第1優先: [data-value="240"] を含む要素
   for (const sel of selectors) {
     const loc = page.locator(sel);
     const count = Math.min(await loc.count().catch(() => 0), 20);
@@ -1135,7 +1142,7 @@ async function findTimeframeMenuRoot(page) {
     }
   }
 
-  // 第2優先: "hours/時間" と "days/日" の両方を含む要素 (お気に入りバーの誤検知防止)
+  // 第2優先: "hours/時間" と "days/日" の両方を含む要素
   for (const sel of selectors) {
     const loc = page.locator(sel);
     const count = Math.min(await loc.count().catch(() => 0), 20);
@@ -1143,11 +1150,43 @@ async function findTimeframeMenuRoot(page) {
       const root = loc.nth(i);
       if (!(await root.isVisible().catch(() => false))) continue;
       const text = normalizeTvText(await root.textContent().catch(() => ""));
-      const hasHoursAndDays =
-        /hours|時間/.test(text) && /days|日/.test(text);
+      const hasHoursAndDays = /hours|時間/.test(text) && /days|日/.test(text);
       const has240 = (await root.locator('[data-value="240"]').count().catch(() => 0)) > 0;
       if (has240 || hasHoursAndDays) return root;
     }
+  }
+
+  // ===== 以下を追加 =====
+
+  // 第3優先: より広いセレクタで、複数の時間足テキストを含むドロップダウン
+  const broadSelectors = [
+    '[role="menu"]', '[role="listbox"]',
+    'div[data-name="menu-inner"]', 'div[class*="menu"]',
+    'div[class*="dropdown"]', 'div[class*="popup"]',
+    'div[class*="popover"]', 'div[class*="flyout"]',
+  ];
+
+  for (const sel of broadSelectors) {
+    const loc = page.locator(sel);
+    const count = Math.min(await loc.count().catch(() => 0), 20);
+    for (let i = count - 1; i >= 0; i--) {
+      const root = loc.nth(i);
+      if (!(await root.isVisible().catch(() => false))) continue;
+      const text = normalizeTvText(await root.textContent().catch(() => ""));
+      // 複数の時間足文字列（"1m","5m","1h","4h","1d" など）を2つ以上含む
+      const tfCount = (text.match(/\b(1m|5m|15m|30m|1h|2h|3h|4h|6h|12h|1d|1w|1mo)\b/gi) || []).length;
+      if (tfCount >= 2) return root;
+    }
+  }
+
+  // 第4優先: data-value が数値のメニュー項目を持つ任意のオーバーレイ
+  const anyOverlay = page.locator('[role="menu"], [role="listbox"], div[data-name="menu-inner"]');
+  const overlayCount = Math.min(await anyOverlay.count().catch(() => 0), 20);
+  for (let i = overlayCount - 1; i >= 0; i--) {
+    const root = anyOverlay.nth(i);
+    if (!(await root.isVisible().catch(() => false))) continue;
+    const hasNumericDataValue = (await root.locator('[data-value]').count().catch(() => 0)) >= 3;
+    if (hasNumericDataValue) return root;
   }
 
   return null;
@@ -1275,10 +1314,36 @@ async function ensureChartTimeframe(page, targetLabel = "4 時間") {
 
   const opened = await openChartTimeframeMenu(page);
   if (!opened) {
+    // ===== フォールバック: キーボードショートカットで4H設定を試みる =====
+    console.log("[timeframe] UI menu failed. Trying keyboard shortcut fallback...");
+    await closeAnyMenu(page);
+    await page.waitForTimeout(500);
+
+    // TradingView: チャートエリアにフォーカスして Alt+4 または単独キーを試す
+    const chartArea = page.locator('#chart-area, canvas, [data-name="chart-area"]').first();
+    if (await chartArea.isVisible().catch(() => false)) {
+      await chartArea.click({ force: true }).catch(() => {});
+      await page.waitForTimeout(300);
+    }
+
+    // "4" キー (TradingViewのデフォルトショートカット: 4H)
+    await page.keyboard.press("4");
+    await page.waitForTimeout(1500);
+
+    const afterKbd = await getCurrentChartTimeframeText(page);
+    console.log(`[timeframe] after keyboard shortcut: "${afterKbd}"`);
+
+    if (isTarget4hText(afterKbd)) {
+      console.log("[timeframe] keyboard shortcut set 4H successfully");
+      return;
+    }
+
+    // キーボードも失敗した場合のみエラー
     await safeScreenshot(page, 'chart_timeframe_button_not_found');
     throw new Error("チャート時間足ボタンが見つかりませんでした");
   }
 
+  // 以降は既存コードそのまま
   await logChartTimeframeMenuState(page, 'chart-timeframe-opened');
 
   const root = await findTimeframeMenuRoot(page);
