@@ -1192,6 +1192,32 @@ async function findTimeframeMenuRoot(page) {
   return null;
 }
 
+// ==============================
+// Change interval ダイアログ対応 (追加)
+// ==============================
+async function isChangeIntervalDialogOpen(page) {
+  return await page.getByText(/^Change interval$/i).first().isVisible().catch(() => false);
+}
+
+async function fill4HInChangeIntervalDialog(page) {
+  console.log("[timeframe] Change interval dialog detected, typing 240...");
+  const inputs = page.locator("input");
+  const count = Math.min(await inputs.count().catch(() => 0), 20);
+  for (let i = 0; i < count; i++) {
+    const inp = inputs.nth(i);
+    if (!(await inp.isVisible().catch(() => false))) continue;
+    await inp.click({ force: true }).catch(() => {});
+    await page.keyboard.press("Control+A");
+    await inp.fill("240");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(1000);
+    console.log("[timeframe] filled 240 in Change interval dialog");
+    return true;
+  }
+  console.log("[timeframe] input not found in Change interval dialog");
+  return false;
+}
+
 async function expandHoursSectionIfNeeded(page, menuRoot) {
   const headers = [
     menuRoot.locator('text=/^HOURS$/i').first(),
@@ -1312,50 +1338,39 @@ async function ensureChartTimeframe(page, targetLabel = "4 時間") {
     return;
   }
 
-  const opened = await openChartTimeframeMenu(page);
-  if (!opened) {
-    // ===== フォールバック: キーボードショートカットで4H設定を試みる =====
-    console.log("[timeframe] UI menu failed. Trying keyboard shortcut fallback...");
-    await closeAnyMenu(page);
-    await page.waitForTimeout(500);
+  // クリック前にすでにダイアログが開いている場合を処理
+  if (await isChangeIntervalDialogOpen(page)) {
+    const ok = await fill4HInChangeIntervalDialog(page);
+    if (!ok) throw new Error("Change interval ダイアログへの入力に失敗しました (pre-click)");
+    // 検証へ
+  } else {
+    const opened = await openChartTimeframeMenu(page);
 
-    // TradingView: チャートエリアにフォーカスして Alt+4 または単独キーを試す
-    const chartArea = page.locator('#chart-area, canvas, [data-name="chart-area"]').first();
-    if (await chartArea.isVisible().catch(() => false)) {
-      await chartArea.click({ force: true }).catch(() => {});
-      await page.waitForTimeout(300);
+    if (!opened) {
+      // ボタンクリック後に Change interval ダイアログが出た場合
+      if (await isChangeIntervalDialogOpen(page)) {
+        const ok = await fill4HInChangeIntervalDialog(page);
+        if (!ok) throw new Error("Change interval ダイアログへの入力に失敗しました (post-click)");
+        // 検証へ
+      } else {
+        await safeScreenshot(page, "chart_timeframe_button_not_found");
+        throw new Error("チャート時間足メニューを開けませんでした（ドロップダウン未検出・ダイアログ未検出）");
+      }
+    } else {
+      await logChartTimeframeMenuState(page, "chart-timeframe-opened");
+
+      const root = await findTimeframeMenuRoot(page);
+      if (!root) {
+        await safeScreenshot(page, "chart_timeframe_menu_not_found");
+        throw new Error("チャート時間足メニューが見つかりませんでした");
+      }
+
+      const ok = await select4hFromMenu(page, root);
+      if (!ok) {
+        await safeScreenshot(page, "chart_4h_not_found");
+        throw new Error(`チャート時間足 "${targetLabel}" が見つかりませんでした`);
+      }
     }
-
-    // "4" キー (TradingViewのデフォルトショートカット: 4H)
-    await page.keyboard.press("4");
-    await page.waitForTimeout(1500);
-
-    const afterKbd = await getCurrentChartTimeframeText(page);
-    console.log(`[timeframe] after keyboard shortcut: "${afterKbd}"`);
-
-    if (isTarget4hText(afterKbd)) {
-      console.log("[timeframe] keyboard shortcut set 4H successfully");
-      return;
-    }
-
-    // キーボードも失敗した場合のみエラー
-    await safeScreenshot(page, 'chart_timeframe_button_not_found');
-    throw new Error("チャート時間足ボタンが見つかりませんでした");
-  }
-
-  // 以降は既存コードそのまま
-  await logChartTimeframeMenuState(page, 'chart-timeframe-opened');
-
-  const root = await findTimeframeMenuRoot(page);
-  if (!root) {
-    await safeScreenshot(page, 'chart_timeframe_menu_not_found');
-    throw new Error("チャート時間足メニューが見つかりませんでした");
-  }
-
-  const ok = await select4hFromMenu(page, root);
-  if (!ok) {
-    await safeScreenshot(page, 'chart_4h_not_found');
-    throw new Error(`チャート時間足 "${targetLabel}" が見つかりませんでした`);
   }
 
   await page.waitForTimeout(1200);
@@ -1364,7 +1379,7 @@ async function ensureChartTimeframe(page, targetLabel = "4 時間") {
   console.log(`[timeframe] current chart timeframe after change: "${after}"`);
 
   if (!isTarget4hText(after)) {
-    await safeScreenshot(page, 'chart_timeframe_verify_failed');
+    await safeScreenshot(page, "chart_timeframe_verify_failed");
     throw new Error(`チャート時間足の変更確認に失敗しました。現在: "${after}"`);
   }
 }
