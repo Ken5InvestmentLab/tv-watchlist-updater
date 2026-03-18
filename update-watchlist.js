@@ -1091,7 +1091,7 @@ async function openChartTimeframeMenu(page) {
     if (!clicked) continue;
 
     await page.waitForTimeout(1200);
-    // Change interval ダイアログが開いた場合は即座に脱出（後続候補が誤クリックしないように）
+    // Change interval ダイアログが出た場合は即脱出（後続候補の誤クリック防止）
     if (await isChangeIntervalDialogOpen(page)) return false;
     const root = await findTimeframeMenuRoot(page);
     if (root) return true;
@@ -1099,8 +1099,8 @@ async function openChartTimeframeMenu(page) {
     await page.waitForTimeout(800);
     if (await isChangeIntervalDialogOpen(page)) return false;
     const rootRetry = await findTimeframeMenuRoot(page);
-    if (rootRetry) return rootRetry;
-    }
+    if (rootRetry) return true; // rootRetry → true に修正
+  }
 
   const buttons = page.locator('button[aria-haspopup="menu"], header button, button');
   const count = Math.min(await buttons.count().catch(() => 0), 200);
