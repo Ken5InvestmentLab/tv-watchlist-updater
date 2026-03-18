@@ -1087,17 +1087,17 @@ async function openChartTimeframeMenu(page) {
       console.log("[timeframe] menu button candidate:", JSON.stringify(meta));
     }
 
-    // 変更後
     const clicked = await clickBestEffort(c, 4000);
     if (!clicked) continue;
 
-    // メニューアニメーション完了を待つ（300ms → 1200ms）
     await page.waitForTimeout(1200);
+    // Change interval ダイアログが開いた場合は即座に脱出（後続候補が誤クリックしないように）
+    if (await isChangeIntervalDialogOpen(page)) return false;
     const root = await findTimeframeMenuRoot(page);
     if (root) return true;
 
-    // 1200ms でも見つからない場合は更に待って再試行
     await page.waitForTimeout(800);
+    if (await isChangeIntervalDialogOpen(page)) return false;
     const rootRetry = await findTimeframeMenuRoot(page);
     if (rootRetry) return rootRetry;
     }
@@ -1117,6 +1117,7 @@ async function openChartTimeframeMenu(page) {
     if (!clicked) continue;
 
     await page.waitForTimeout(1200);
+    if (await isChangeIntervalDialogOpen(page)) return false;
     const root = await findTimeframeMenuRoot(page);
     if (root) return true;
   }
