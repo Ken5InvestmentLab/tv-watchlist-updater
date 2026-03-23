@@ -26,9 +26,9 @@ const ALERT_TIMEFRAME_LABEL = process.env.ALERT_TIMEFRAME_LABEL || "4 時間";
 const NAV_TIMEOUT = 90000;
 const STEP_TIMEOUT = 45000;
 
-const ALERT_SLOT_RELEASE_WAIT_MS = Number(process.env.ALERT_SLOT_RELEASE_WAIT_MS || 45000);
-const WATCHLIST_PROMO_RETRY_MAX = Number(process.env.WATCHLIST_PROMO_RETRY_MAX || 3);
-const WATCHLIST_PROMO_RETRY_WAIT_MS = Number(process.env.WATCHLIST_PROMO_RETRY_WAIT_MS || 15000);
+const ALERT_SLOT_RELEASE_WAIT_MS = Number(process.env.ALERT_SLOT_RELEASE_WAIT_MS || 180000);
+const WATCHLIST_PROMO_RETRY_MAX = Number(process.env.WATCHLIST_PROMO_RETRY_MAX || 6);
+const WATCHLIST_PROMO_RETRY_WAIT_MS = Number(process.env.WATCHLIST_PROMO_RETRY_WAIT_MS || 30000);
 
 const WORKDIR = path.resolve(process.cwd(), "tmp");
 const OUT1 = path.join(WORKDIR, "wl1.txt");
@@ -1683,6 +1683,7 @@ async function findVisibleAlertSubmitButton(page) {
   return null;
 }
 
+// submitAlertDialog の promo retry ブロックを以下に差し替え
 async function submitAlertDialog(page) {
   console.log("Submitting alert dialog...");
 
@@ -1703,7 +1704,7 @@ async function submitAlertDialog(page) {
   let dialogClosed = false;
   let promoRetryCount = 0;
 
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 20; i++) {   // ← 14 → 20 に拡張
     await page.waitForTimeout(1500);
 
     if (await isWatchlistPromoDialogVisible(page)) {
@@ -1727,8 +1728,10 @@ async function submitAlertDialog(page) {
         );
       }
 
-      console.log(`[promo] waiting ${WATCHLIST_PROMO_RETRY_WAIT_MS}ms before retrying Create`);
-      await page.waitForTimeout(WATCHLIST_PROMO_RETRY_WAIT_MS);
+      // ★ 変更点: スロット解放待機を指数バックオフに
+      const waitMs = WATCHLIST_PROMO_RETRY_WAIT_MS * promoRetryCount;
+      console.log(`[promo] waiting ${waitMs}ms before retrying Create (backoff x${promoRetryCount})`);
+      await page.waitForTimeout(waitMs);
 
       targetBtn = await findVisibleAlertSubmitButton(page);
       if (!targetBtn) {
@@ -1757,7 +1760,7 @@ async function submitAlertDialog(page) {
       throw new Error("アラート作成時に上限または作成失敗メッセージを検知しました");
     }
 
-    if (i < 13) {
+    if (i < 19) {
       console.log("Dialog still visible, retrying click...");
       await clickBestEffort(targetBtn, 5000);
     }
