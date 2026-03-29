@@ -1,6 +1,9 @@
 name: TV Watchlist Update (Playwright)
 
 on:
+  push:
+    branches: [main]
+    paths: ["**.js"]
   repository_dispatch:
     types: [build_complete]
   workflow_dispatch:
@@ -141,3 +144,74 @@ jobs:
           if [ "$notify_failed" -ne 0 ]; then
             echo "::warning::One or more Discord failure notifications failed."
           fi
+
+      - name: Create Auto-Fix Issue on Failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+
+          gh label create "auto-fix-needed" \
+            --color "FF4444" \
+            --description "Claude Code自動修正待ち" 2>/dev/null || true
+
+          EXISTING=$(gh issue list \
+            --label "auto-fix-needed" \
+            --state open \
+            --json number \
+            --jq length)
+
+          if [ "$EXISTING" -ne 0 ]; then
+            echo "既存のauto-fix Issueが存在します。スキップします。"
+            exit 0
+          fi
+
+          # スクリーンショットをdebug/screenshotsブランチにpush
+          SCREENSHOT_PATHS=""
+          SCREENSHOTS=$(find tmp -name "*.png" 2>/dev/null | sort | head -20)
+
+          if [ -n "$SCREENSHOTS" ]; then
+            git fetch origin debug/screenshots 2>/dev/null || true
+            git checkout --orphan debug/screenshots-tmp
+            git rm -rf . --quiet 2>/dev/null || true
+            mkdir -p .debug
+            for f in $SCREENSHOTS; do
+              dest=".debug/$(basename "$f")"
+              cp "$f" "$dest"
+              SCREENSHOT_PATHS="$SCREENSHOT_PATHS\n- \`$dest\`"
+            done
+            git add .debug/
+            git commit -m "debug: screenshots from run ${{ github.run_id }}"
+            git push origin HEAD:debug/screenshots --force
+            git checkout -
+          fi
+
+          # Issue作成
+          BODY="## ワークフロー失敗レポート
+
+**実行URL:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+**トリガー:** ${{ github.event_name }}
+**ブランチ:** ${{ github.ref_name }}
+**コミット:** ${{ github.sha }}
+
+## デバッグスクリーンショット
+ブランチ \`debug/screenshots\` の以下のパスを確認してください:"
+
+          if [ -n "$SCREENSHOT_PATHS" ]; then
+            BODY="$BODY$(printf "$SCREENSHOT_PATHS")"
+          else
+            BODY="$BODY
+スクリーンショットなし"
+          fi
+
+          BODY="$BODY
+
+このIssueはClaude Code自動修正ボットによって処理されます。修正完了後に自動でクローズされます。"
+
+          gh issue create \
+            --title "[auto-fix] ワークフロー失敗" \
+            --body "$BODY" \
+            --label "auto-fix-needed"
+          echo "Auto-fix Issueを作成しました。"
