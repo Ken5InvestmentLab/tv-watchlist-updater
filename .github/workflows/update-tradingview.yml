@@ -16,6 +16,9 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: write
+      issues: write
 
     steps:
       - uses: actions/checkout@v4
@@ -170,14 +173,14 @@ jobs:
 
           # スクリーンショットをdebug/screenshotsブランチにpush
           SCREENSHOT_PATHS=""
-          SCREENSHOTS=$(find tmp -name "*.png" 2>/dev/null | sort | head -20)
+          mapfile -t SCREENSHOTS < <(find tmp -name "*.png" 2>/dev/null | sort | head -20)
 
-          if [ -n "$SCREENSHOTS" ]; then
+          if [ "${#SCREENSHOTS[@]}" -gt 0 ]; then
             git fetch origin debug/screenshots 2>/dev/null || true
             git checkout --orphan debug/screenshots-tmp
             git rm -rf . --quiet 2>/dev/null || true
             mkdir -p .debug
-            for f in $SCREENSHOTS; do
+            for f in "${SCREENSHOTS[@]}"; do
               dest=".debug/$(basename "$f")"
               cp "$f" "$dest"
               SCREENSHOT_PATHS="$SCREENSHOT_PATHS\n- \`$dest\`"
