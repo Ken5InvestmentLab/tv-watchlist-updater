@@ -1,6 +1,10 @@
 name: TV Watchlist Update (Playwright)
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "**.js"
   repository_dispatch:
     types: [build_complete]
   workflow_dispatch:
