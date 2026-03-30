@@ -1,0 +1,112 @@
+name: Auto-Fix on Failure
+
+on:
+  workflow_run:
+    workflows: ["TV Watchlist Update (Playwright)"]
+    types: [completed]
+
+jobs:
+  create-issue:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for existing auto-fix issue
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXISTING=$(gh issue list \
+            --label "auto-fix-needed" \
+            --state open \
+            --json number \
+            --jq length)
+          echo "existing=$EXISTING" >> "$GITHUB_OUTPUT"
+
+      - name: Download debug screenshots from artifact
+        if: steps.check.outputs.existing == '0'
+        id: screenshots
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_ID="${{ github.event.workflow_run.id }}"
+          ARTIFACT_ID=$(gh api \
+            "repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name=="tv-debug") | .id' | head -1)
+
+          SCREENSHOT_PATHS=""
+
+          if [ -n "$ARTIFACT_ID" ]; then
+            gh api "repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip" > screenshots.zip
+            mkdir -p .debug
+            unzip -o screenshots.zip -d .debug/ 2>/dev/null || true
+            mapfile -t PNGS < <(find .debug -name "*.png" | sort | head -20)
+
+            if [ "${#PNGS[@]}" -gt 0 ]; then
+              git config user.email "actions@github.com"
+              git config user.name "GitHub Actions"
+              git fetch origin debug/screenshots 2>/dev/null || true
+              git checkout --orphan debug/screenshots-tmp
+              git rm -rf . --quiet 2>/dev/null || true
+              mkdir -p .debug
+              for f in "${PNGS[@]}"; do
+                cp "$f" ".debug/$(basename "$f")" 2>/dev/null || true
+              done
+              git add .debug/
+              git commit -m "debug: screenshots from run $RUN_ID"
+              git push origin HEAD:debug/screenshots --force
+              git checkout -
+
+              for f in "${PNGS[@]}"; do
+                SCREENSHOT_PATHS="$SCREENSHOT_PATHS\n- \`.debug/$(basename "$f")\`"
+              done
+            fi
+          fi
+
+          echo "paths=$SCREENSHOT_PATHS" >> "$GITHUB_OUTPUT"
+
+      - name: Create auto-fix label if missing
+        if: steps.check.outputs.existing == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create "auto-fix-needed" \
+            --color "FF4444" \
+            --description "Claude Code自動修正待ち" 2>/dev/null || true
+
+      - name: Create auto-fix issue
+        if: steps.check.outputs.existing == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SCREENSHOT_PATHS="${{ steps.screenshots.outputs.paths }}"
+
+          if [ -n "$SCREENSHOT_PATHS" ]; then
+            SCREENSHOT_SECTION="ブランチ \`debug/screenshots\` の以下のパスを確認してください:$(printf "$SCREENSHOT_PATHS")"
+          else
+            SCREENSHOT_SECTION="スクリーンショットなし"
+          fi
+
+          BODY="## ワークフロー失敗レポート
+
+**実行URL:** ${{ github.event.workflow_run.html_url }}
+**トリガー:** ${{ github.event.workflow_run.event }}
+**ブランチ:** ${{ github.event.workflow_run.head_branch }}
+**コミット:** ${{ github.event.workflow_run.head_sha }}
+
+## デバッグスクリーンショット
+$SCREENSHOT_SECTION
+
+このIssueはClaude Code自動修正ボットによって処理されます。修正完了後に自動でクローズされます。"
+
+          gh issue create \
+            --title "[auto-fix] ワークフロー失敗" \
+            --body "$BODY" \
+            --label "auto-fix-needed"
+          echo "Auto-fix Issueを作成しました。"
