@@ -63,7 +63,6 @@ jobs:
                 git config user.email "actions@github.com"
                 git config user.name "GitHub Actions"
 
-                # Save PNGs before switching branches
                 TMPDIR_PNGS=$(mktemp -d)
                 for f in "${PNGS[@]}"; do
                   cp "$f" "${TMPDIR_PNGS}/$(basename "$f")"
@@ -90,6 +89,10 @@ jobs:
         if: steps.check.outputs.existing == '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           if [ "${{ steps.screenshots.outputs.has_screenshots }}" = "true" ]; then
             SCREENSHOT_SECTION="スクリーンショットは \`debug/screenshots\` ブランチの \`.debug/\` フォルダに保存されました。"
@@ -97,17 +100,22 @@ jobs:
             SCREENSHOT_SECTION="スクリーンショットなし（アーティファクトが見つかりませんでした）"
           fi
 
+          BODY=$(cat <<EOF
+          ## ワークフロー失敗レポート
+
+          **実行URL:** ${RUN_URL}
+          **トリガー:** ${RUN_EVENT}
+          **ブランチ:** ${RUN_BRANCH}
+          **コミット:** ${RUN_SHA}
+
+          ## デバッグスクリーンショット
+          ${SCREENSHOT_SECTION}
+
+          このIssueはClaude Code自動修正ボットによって処理されます。修正完了後に自動でクローズされます。
+          EOF
+          )
+
           gh issue create \
-            --title "[auto-fix] ワークフロー失敗: ${{ github.event.workflow_run.head_branch }}" \
+            --title "[auto-fix] ワークフロー失敗: ${RUN_BRANCH}" \
             --label "auto-fix-needed" \
-            --body "## ワークフロー失敗レポート
-
-**実行URL:** ${{ github.event.workflow_run.html_url }}
-**トリガー:** ${{ github.event.workflow_run.event }}
-**ブランチ:** ${{ github.event.workflow_run.head_branch }}
-**コミット:** ${{ github.event.workflow_run.head_sha }}
-
-## デバッグスクリーンショット
-${SCREENSHOT_SECTION}
-
-このIssueはClaude Code自動修正ボットによって処理されます。修正完了後に自動でクローズされます。"
+            --body "${BODY}"
