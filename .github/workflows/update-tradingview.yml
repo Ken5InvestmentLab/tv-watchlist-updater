@@ -1,9 +1,6 @@
 name: TV Watchlist Update (Playwright)
 
 on:
-  push:
-    branches: [main]
-    paths: ["**.js"]
   repository_dispatch:
     types: [build_complete]
   workflow_dispatch:
@@ -191,7 +188,6 @@ jobs:
             git checkout -
           fi
 
-          # Issue作成
           BODY="## ワークフロー失敗レポート
 
 **実行URL:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
