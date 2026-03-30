@@ -17,6 +17,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Create auto-fix label if missing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create "auto-fix-needed" \
+            --color "FF4444" \
+            --description "Claude Code自動修正待ち" 2>/dev/null || true
+
       - name: Check for existing auto-fix issue
         id: check
         env:
@@ -26,10 +34,10 @@ jobs:
             --label "auto-fix-needed" \
             --state open \
             --json number \
-            --jq length)
-          echo "existing=$EXISTING" >> "$GITHUB_OUTPUT"
+            --jq length 2>/dev/null || echo "0")
+          echo "existing=${EXISTING}" >> "$GITHUB_OUTPUT"
 
-      - name: Download debug screenshots from artifact
+      - name: Download and commit debug screenshots
         if: steps.check.outputs.existing == '0'
         id: screenshots
         env:
@@ -37,63 +45,62 @@ jobs:
         run: |
           RUN_ID="${{ github.event.workflow_run.id }}"
           ARTIFACT_ID=$(gh api \
-            "repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts" \
-            --jq '.artifacts[] | select(.name=="tv-debug") | .id' | head -1)
+            "repos/${{ github.repository }}/actions/runs/${RUN_ID}/artifacts" \
+            --jq '.artifacts[] | select(.name=="tv-debug") | .id' 2>/dev/null | head -1)
 
-          SCREENSHOT_PATHS=""
+          HAS_SCREENSHOTS="false"
 
           if [ -n "$ARTIFACT_ID" ]; then
-            gh api "repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip" > screenshots.zip
-            mkdir -p .debug
-            unzip -o screenshots.zip -d .debug/ 2>/dev/null || true
-            mapfile -t PNGS < <(find .debug -name "*.png" | sort | head -20)
+            gh api "repos/${{ github.repository }}/actions/artifacts/${ARTIFACT_ID}/zip" \
+              > screenshots.zip 2>/dev/null || true
 
-            if [ "${#PNGS[@]}" -gt 0 ]; then
-              git config user.email "actions@github.com"
-              git config user.name "GitHub Actions"
-              git fetch origin debug/screenshots 2>/dev/null || true
-              git checkout --orphan debug/screenshots-tmp
-              git rm -rf . --quiet 2>/dev/null || true
+            if [ -s screenshots.zip ]; then
               mkdir -p .debug
-              for f in "${PNGS[@]}"; do
-                cp "$f" ".debug/$(basename "$f")" 2>/dev/null || true
-              done
-              git add .debug/
-              git commit -m "debug: screenshots from run $RUN_ID"
-              git push origin HEAD:debug/screenshots --force
-              git checkout -
+              unzip -o screenshots.zip -d .debug/ 2>/dev/null || true
+              mapfile -t PNGS < <(find .debug -name "*.png" | sort | head -20)
 
-              for f in "${PNGS[@]}"; do
-                SCREENSHOT_PATHS="$SCREENSHOT_PATHS\n- \`.debug/$(basename "$f")\`"
-              done
+              if [ "${#PNGS[@]}" -gt 0 ]; then
+                git config user.email "actions@github.com"
+                git config user.name "GitHub Actions"
+
+                # Save PNGs before switching branches
+                TMPDIR_PNGS=$(mktemp -d)
+                for f in "${PNGS[@]}"; do
+                  cp "$f" "${TMPDIR_PNGS}/$(basename "$f")"
+                done
+
+                git checkout --orphan debug-screenshots-work
+                git rm -rf . --quiet 2>/dev/null || true
+
+                mkdir -p .debug
+                cp "${TMPDIR_PNGS}"/*.png .debug/
+
+                git add .debug/
+                git commit -m "debug: screenshots from run ${RUN_ID}"
+                git push origin HEAD:debug/screenshots --force
+
+                HAS_SCREENSHOTS="true"
+              fi
             fi
           fi
 
-          echo "paths=$SCREENSHOT_PATHS" >> "$GITHUB_OUTPUT"
-
-      - name: Create auto-fix label if missing
-        if: steps.check.outputs.existing == '0'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh label create "auto-fix-needed" \
-            --color "FF4444" \
-            --description "Claude Code自動修正待ち" 2>/dev/null || true
+          echo "has_screenshots=${HAS_SCREENSHOTS}" >> "$GITHUB_OUTPUT"
 
       - name: Create auto-fix issue
         if: steps.check.outputs.existing == '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          SCREENSHOT_PATHS="${{ steps.screenshots.outputs.paths }}"
-
-          if [ -n "$SCREENSHOT_PATHS" ]; then
-            SCREENSHOT_SECTION="ブランチ \`debug/screenshots\` の以下のパスを確認してください:$(printf "$SCREENSHOT_PATHS")"
+          if [ "${{ steps.screenshots.outputs.has_screenshots }}" = "true" ]; then
+            SCREENSHOT_SECTION="スクリーンショットは \`debug/screenshots\` ブランチの \`.debug/\` フォルダに保存されました。"
           else
-            SCREENSHOT_SECTION="スクリーンショットなし"
+            SCREENSHOT_SECTION="スクリーンショットなし（アーティファクトが見つかりませんでした）"
           fi
 
-          BODY="## ワークフロー失敗レポート
+          gh issue create \
+            --title "[auto-fix] ワークフロー失敗: ${{ github.event.workflow_run.head_branch }}" \
+            --label "auto-fix-needed" \
+            --body "## ワークフロー失敗レポート
 
 **実行URL:** ${{ github.event.workflow_run.html_url }}
 **トリガー:** ${{ github.event.workflow_run.event }}
@@ -101,12 +108,6 @@ jobs:
 **コミット:** ${{ github.event.workflow_run.head_sha }}
 
 ## デバッグスクリーンショット
-$SCREENSHOT_SECTION
+${SCREENSHOT_SECTION}
 
 このIssueはClaude Code自動修正ボットによって処理されます。修正完了後に自動でクローズされます。"
-
-          gh issue create \
-            --title "[auto-fix] ワークフロー失敗" \
-            --body "$BODY" \
-            --label "auto-fix-needed"
-          echo "Auto-fix Issueを作成しました。"
