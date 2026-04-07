@@ -151,35 +151,54 @@ async function clickBestEffort(locator, timeout = 8000) {
 // Base UI: Watchlist panel / menu
 // ==============================
 async function isWatchlistPanelReady(page) {
+  // パネルが開いている時に表示される具体的な要素をチェック
+  const panelIndicators = [
+    'div[data-name="watchlist-list"]',      // ウォッチリスト一覧のコンテナ
+    'div[data-role="list"]',                // リストロール
+    '[data-name="watchlists-list"]',
+    '.watchlist-panel',
+    'div[class*="watchlist"] >> text=/ウォッチリスト|Watchlist/i'
+  ];
+  
+  for (const sel of panelIndicators) {
+    const el = page.locator(sel).first();
+    if (await el.isVisible().catch(() => false)) return true;
+  }
+  
+  // フォールバック：従来のボタン（ただし信頼性低い）
   const menuButton = page.locator('button[data-name="watchlists-button"]').first();
   return await menuButton.isVisible().catch(() => false);
 }
 
 async function openWatchlistPanel(page) {
+  // 既に開いていれば何もしない
+  if (await isWatchlistPanelReady(page)) return;
+  
   const candidates = [
     page.locator('button[aria-label="ウォッチリスト、詳細、ニュース"]').first(),
     page.locator('button[aria-label="Watchlist, details and news"]').first(),
     page.locator('button[data-tooltip="ウォッチリスト、詳細、ニュース"]').first(),
     page.locator('button[data-tooltip="Watchlist, details and news"]').first(),
+    page.locator('button[data-name="watchlists-button"]').first(),
   ];
-
+  
   for (let attempt = 0; attempt < 4; attempt++) {
     for (const c of candidates) {
-      const clicked = await safeClick(c, { timeout: 6000, force: true });
+      if (!(await c.isVisible().catch(() => false))) continue;
+      const clicked = await clickBestEffort(c, { timeout: 6000, force: true });
       if (!clicked) continue;
-
-      await page.waitForTimeout(1200);
-
-      if (await isWatchlistPanelReady(page)) {
-        return;
+      
+      // パネルが開くのを待つ（最大8秒）
+      for (let wait = 0; wait < 16; wait++) {
+        await page.waitForTimeout(500);
+        if (await isWatchlistPanelReady(page)) return;
       }
     }
-
     await page.waitForTimeout(500);
   }
-
+  
   await safeScreenshot(page, "watchlist_panel_not_ready");
-  throw new Error("ウォッチリストパネルは開けましたが、操作可能状態にできませんでした");
+  throw new Error("ウォッチリストパネルを開けませんでした");
 }
 
 async function ensureWatchlistPanelOpen(page) {
@@ -413,6 +432,10 @@ async function assertWatchlistExists(page, listName) {
 // ==============================
 async function deleteManagedWatchlistsByPrefix(page, prefix) {
   console.log(`Deleting watchlists with prefix: ${prefix}`);
+  
+  // 確実にパネルを開いておく
+  await ensureWatchlistPanelOpen(page);
+  await page.waitForTimeout(1000);
 
   await openListOpenDialog(page);
 
