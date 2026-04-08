@@ -130,23 +130,6 @@ async function firstVisible(locator, max = 30) {
   return null;
 }
 
-async function clickBestEffort(locator, timeout = 8000) {
-  try {
-    await locator.scrollIntoViewIfNeeded().catch(() => {});
-    await locator.click({ force: true, timeout });
-    return true;
-  } catch {}
-  try {
-    await locator.dispatchEvent("click");
-    return true;
-  } catch {}
-  try {
-    await locator.evaluate((el) => el.click());
-    return true;
-  } catch {}
-  return false;
-}
-
 // ==============================
 // Base UI: Watchlist panel / menu (UI変更に強い版)
 // ==============================
@@ -1083,6 +1066,42 @@ async function deleteManagedAlerts(page, prefixes) {
   }
 
   throw new Error("アラート削除ループが上限に達しました");
+}
+
+async function openWatchlistMenuHard(page, retry = 8) {
+  await ensureWatchlistPanelOpen(page);
+
+  for (let i = 0; i < retry; i++) {
+    await closeAnyMenu(page);
+    await page.waitForTimeout(300);
+
+    const trigger = await getWatchlistMenuTrigger(page);
+    if (!trigger) {
+      console.log(`[menu] Watchlist menu trigger not found. retry=${i + 1}`);
+      await page.waitForTimeout(600);
+      continue;
+    }
+
+    // 追加: ホバーしてからクリック（不要と言われても保険）
+    await trigger.hover().catch(() => {});
+    await page.waitForTimeout(200);
+
+    const ok = await clickBestEffort(trigger, 8000);
+    if (!ok) continue;
+
+    // メニューが開くのを最大6秒待つ（従来より長め）
+    const menuRoot = await waitForMenuOpen(page, 6000);
+    if (menuRoot) {
+      console.log(`[menu] watchlist menu opened. retry=${i + 1}`);
+      return true;
+    }
+
+    console.log(`[menu] watchlist menu not actually opened. retry=${i + 1}`);
+    await page.waitForTimeout(600);
+  }
+
+  await safeScreenshot(page, "watchlist_menu_not_opened");
+  return false;
 }
 
 // ==============================
