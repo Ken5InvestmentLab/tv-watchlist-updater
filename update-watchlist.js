@@ -236,31 +236,46 @@ async function getWatchlistMenuTrigger(page) {
   const watchlistBtn = await getWatchlistButton(page);
   if (!watchlistBtn) return null;
 
-  // 優先順位の高い候補から順にチェック
-  const candidates = [
-    // クラス名に arrow を含む要素
-    () => watchlistBtn.locator('[class*="arrow"]').first(),
-    // SVGアイコンの親要素（矢印アイコンの場合）
-    () => watchlistBtn.locator('svg').locator('xpath=..').first(),
-    // 下矢印テキスト（▼, ⌄, ↓）を含む要素
-    () => watchlistBtn.locator('text=/[▼⌄↓]|arrow/i').first(),
-    // ボタン内の最後の子要素（多くの場合、矢印が最後）
-    () => watchlistBtn.locator('> :last-child').first(),
-    // フォールバック: ボタン全体
-    () => watchlistBtn,
-  ];
+  // 1. 現在のウォッチリスト名のテキストをクリック（最も安定）
+  const currentName = await getCurrentWatchlistTitle(page);
+  if (currentName) {
+    const nameElement = watchlistBtn.locator(`text=${currentName}`).first();
+    if (await nameElement.isVisible().catch(() => false)) {
+      console.log(`[trigger] using watchlist name text: "${currentName}"`);
+      return nameElement;
+    }
+  }
 
-  for (const factory of candidates) {
-    const el = factory();
-    if ((await el.count()) === 0) continue;
-    if (await el.isVisible().catch(() => false)) {
-      // クリック可能な先祖（buttonなど）を返す
-      const clickable = el.locator('xpath=ancestor-or-self::*[self::button or @role="button"]').first();
-      if (await clickable.isVisible().catch(() => false)) return clickable;
+  // 2. 従来の矢印探索
+  const arrowSelectors = [
+    '[class*="arrow"]',
+    'svg',
+    'span[role="img"]',
+    'text=/[▼⌄↓]/',
+    '> :last-child',
+  ];
+  for (const sel of arrowSelectors) {
+    const el = watchlistBtn.locator(sel).first();
+    if (await el.count().catch(() => 0) && await el.isVisible().catch(() => false)) {
+      console.log(`[trigger] using arrow selector: ${sel}`);
       return el;
     }
   }
-  return null;
+
+  // 3. ボタン内の全ての可視子要素を順に試す（最終手段）
+  const allChildren = watchlistBtn.locator('*');
+  const childCount = Math.min(await allChildren.count().catch(() => 0), 30);
+  for (let i = 0; i < childCount; i++) {
+    const child = allChildren.nth(i);
+    if (await child.isVisible().catch(() => false)) {
+      console.log(`[trigger] using child element #${i}`);
+      return child;
+    }
+  }
+
+  // 4. どうしてもダメならボタン全体
+  console.log(`[trigger] falling back to whole button`);
+  return watchlistBtn;
 }
 
 // 現在選択中のウォッチリスト名を取得
