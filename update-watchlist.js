@@ -178,8 +178,14 @@ async function getWatchlistButton(page) {
 async function waitForMenuOpen(page, timeout = 10000) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
+    // 既存のチェック
     const menu = await getVisibleWatchlistMenuRoot(page);
     if (menu) return menu;
+
+    // 新たに追加：任意の絶対位置にある div で、メニューらしいテキストを含むもの
+    const anyFloat = page.locator('body > div:not([style*="display: none"])').filter({ hasText: /リストにアラート|Open list|Upload list/i }).first();
+    if (await anyFloat.isVisible().catch(() => false)) return anyFloat;
+
     await page.waitForTimeout(300);
   }
   return null;
@@ -278,20 +284,23 @@ async function getWatchlistMenuTrigger(page) {
   return watchlistBtn;
 }
 
-// 現在選択中のウォッチリスト名を取得
 async function getCurrentWatchlistTitle(page) {
   const btn = await getWatchlistButton(page);
   if (!btn) return "";
   
-  const text = ((await btn.textContent().catch(() => "")) || "").trim();
-  // アイコンなどが含まれる場合があるので、最初の単語または改行で区切る
-  const lines = text.split(/\n/);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed && !trimmed.match(/^[0-9]+$/)) {
-      return trimmed;
+  // すべてのテキストノードを結合して取得（改行や空白を正規化）
+  const text = await btn.evaluate(el => {
+    const allText = el.innerText || el.textContent || "";
+    // 矢印アイコンなどが含まれる場合は、最初の行または最初の非空トークンを取る
+    const lines = allText.split(/\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.match(/^[0-9]+$/) && !trimmed.match(/[▼⌄↓]/)) {
+        return trimmed;
+      }
     }
-  }
+    return lines[0]?.trim() || "";
+  });
   return text;
 }
 
@@ -406,37 +415,27 @@ async function waitForTradingViewReady(page) {
   await page.waitForTimeout(2000);
 }
 
-async function openWatchlistMenuHard(page, retry = 8) {
-  await ensureWatchlistPanelOpen(page);
-
-  for (let i = 0; i < retry; i++) {
-    await closeAnyMenu(page);
-    await page.waitForTimeout(300);
-
-    const btn = await getWatchlistMenuTrigger(page);
-    if (!btn) {
-      // デバッグ出力はそのまま
-      console.log(`[menu] Watchlist menu trigger not found. retry=${i + 1}`);
-      // ... 既存のデバッグコード ...
-      await page.waitForTimeout(600);
-      continue;
-    }
-
-    const ok = await clickBestEffort(btn, 8000);
-    if (!ok) continue;
-
-    // ★ ここを差し替え
-    const menuRoot = await waitForMenuOpen(page, 5000); // 最大5秒待つ
-    if (menuRoot) {
-      console.log(`[menu] watchlist menu opened. retry=${i + 1}`);
-      return true;
-    }
-
-    console.log(`[menu] watchlist menu not actually opened. retry=${i + 1}`);
-    await page.waitForTimeout(600);
-  }
-
-  await safeScreenshot(page, "watchlist_menu_not_opened");
+async function clickBestEffort(locator, timeout = 8000) {
+  try {
+    await locator.scrollIntoViewIfNeeded().catch(() => {});
+    await locator.click({ force: true, timeout });
+    return true;
+  } catch {}
+  try {
+    await locator.dispatchEvent('click');
+    return true;
+  } catch {}
+  try {
+    // ネイティブな mousedown + mouseup を発火
+    await locator.evaluate(el => {
+      const evtDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window });
+      const evtUp = new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window });
+      el.dispatchEvent(evtDown);
+      el.dispatchEvent(evtUp);
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    });
+    return true;
+  } catch {}
   return false;
 }
 
@@ -559,6 +558,24 @@ async function closeOpenListDialogIfVisible(page) {
     return true;
   }
   return false;
+}
+
+async function getWatchlistNameElement(page, listName) {
+  const btn = await getWatchlistButton(page);
+  if (!btn) return null;
+
+  // ボタン内のすべての要素から、テキストが listName と一致するものを探す（部分一致でも可）
+  const allElements = btn.locator('*');
+  const count = await allElements.count();
+  for (let i = 0; i < count; i++) {
+    const el = allElements.nth(i);
+    const text = await el.textContent();
+    if (text && text.trim() === listName) {
+      return el;
+    }
+  }
+  // 見つからなければ、テキストを含む任意の要素を返す（フォールバック）
+  return btn.locator(`:has-text("${listName}")`).first();
 }
 
 async function switchWatchlistTo(page, listName) {
