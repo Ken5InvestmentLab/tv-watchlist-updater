@@ -135,23 +135,27 @@ async function firstVisible(locator, max = 30) {
 // ==============================
 
 async function getWatchlistButton(page) {
-  // 1. ロール + テキスト（最も信頼できる）
+  // 1. data-name 属性（最も信頼できる）
+  const dataNameBtn = page.locator('button[data-name="watchlists-button"]').first();
+  if (await dataNameBtn.isVisible().catch(() => false)) return dataNameBtn;
+
+  // 2. ロール + テキスト
   const roleBtn = page.getByRole('button', { name: /ウォッチリスト|Watchlist/i }).first();
   if (await roleBtn.isVisible().catch(() => false)) return roleBtn;
 
-  // 2. aria-label や title
+  // 3. aria-label や title
   const attrBtn = page.locator('button[aria-label*="ウォッチリスト"], button[aria-label*="Watchlist"], button[title*="ウォッチリスト"], button[title*="Watchlist"]').first();
   if (await attrBtn.isVisible().catch(() => false)) return attrBtn;
 
-  // 3. data-tooltip
+  // 4. data-tooltip
   const tooltipBtn = page.locator('button[data-tooltip*="ウォッチリスト"], button[data-tooltip*="Watchlist"]').first();
   if (await tooltipBtn.isVisible().catch(() => false)) return tooltipBtn;
 
-  // 4. 部分クラス名
+  // 5. 部分クラス名
   const classBtn = page.locator('button[class*="watchlist"], button[class*="Watchlist"]').first();
   if (await classBtn.isVisible().catch(() => false)) return classBtn;
 
-  // 5. 最終手段: SVG アイコンの親ボタン（TVはよくアイコンを使う）
+  // 6. 最終手段: SVG アイコンの親ボタン
   const svgBtn = page.locator('svg').locator('xpath=ancestor::button').first();
   if (await svgBtn.isVisible().catch(() => false)) return svgBtn;
 
@@ -270,21 +274,43 @@ async function getWatchlistMenuTrigger(page) {
 async function getCurrentWatchlistTitle(page) {
   const btn = await getWatchlistButton(page);
   if (!btn) return "";
+
+  // 方法1: aria-label から正規表現で抽出（最も信頼性が高い）
+  const ariaLabel = await btn.getAttribute('aria-label');
+  if (ariaLabel) {
+    const match = ariaLabel.match(/(wl[12]_\d{8}_\d{4})/);
+    if (match) return match[1];
+  }
+
+  // 方法2: ボタン内の特定のクラス（TradingView の最近の変更に対応）
+  const nameSelectors = [
+    '[class*="watchlistName"]',
+    '[class*="name"]',
+    '[data-role="watchlist-name"]',
+    'span[class*="title"]',
+    'div[class*="selected"]'
+  ];
   
-  // すべてのテキストノードを結合して取得（改行や空白を正規化）
-  const text = await btn.evaluate(el => {
-    const allText = el.innerText || el.textContent || "";
-    // 矢印アイコンなどが含まれる場合は、最初の行または最初の非空トークンを取る
-    const lines = allText.split(/\n/);
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.match(/^[0-9]+$/) && !trimmed.match(/[▼⌄↓]/)) {
-        return trimmed;
+  for (const sel of nameSelectors) {
+    const el = btn.locator(sel).first();
+    if (await el.isVisible().catch(() => false)) {
+      const text = await el.textContent();
+      if (text && text.trim()) {
+        const match = text.trim().match(/(wl[12]_\d{8}_\d{4})/);
+        if (match) return match[1];
+        return text.trim();
       }
     }
-    return lines[0]?.trim() || "";
-  });
-  return text;
+  }
+
+  // 方法3: ボタン全体のテキストから正規表現で抽出
+  const fullText = await btn.evaluate(el => el.innerText || el.textContent || "");
+  const match = fullText.match(/(wl[12]_\d{8}_\d{4})/);
+  if (match) return match[1];
+
+  // 方法4: 従来のトークン分割（フォールバック）
+  const tokens = fullText.split(/\s+/).filter(t => t && !t.match(/[▼⌄↓▶›»]/));
+  return tokens[0] || "";
 }
 
 // パネルが開いているか（aria-pressed または実際のリスト要素で判定）
@@ -517,17 +543,47 @@ async function clickMenuItemByText(page, re) {
 // Open list dialog / switch list
 // ==============================
 async function openListOpenDialog(page) {
-  const listAnyRow = page.locator('div[data-role="list-item"]').first();
-  if (await listAnyRow.isVisible().catch(() => false)) return;
+  // 既にリスト一覧が表示されているか確認
+  const listAnyRow = page.locator('div[data-role="list-item"], [role="option"], [class*="watchlist-item"]').first();
+  if (await listAnyRow.isVisible().catch(() => false)) {
+    console.log("List dialog already open");
+    return;
+  }
 
-  const opened = await openWatchlistMenuHard(page, 8);
-  if (!opened) throw new Error("ウォッチリストメニューが開けませんでした");
+  // メニューを開く（最大3回リトライ）
+  let opened = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    opened = await openWatchlistMenuHard(page, 8);
+    if (opened) break;
+    await page.waitForTimeout(1000);
+  }
+  
+  if (!opened) {
+    throw new Error("ウォッチリストメニューが開けませんでした");
+  }
 
-  await clickMenuItemByText(page, /リストを開く|Open list/i);
-  await page.waitForTimeout(1200);
+  // 「リストを開く」メニューをクリック（複数のテキストバリエーションに対応）
+  const openTexts = [/リストを開く/i, /Open list/i, /Manage watchlists/i, /すべてのリスト/i];
+  let clicked = false;
+  
+  for (const re of openTexts) {
+    const item = await findMenuItemByText(page, re);
+    if (item) {
+      await clickBestEffort(item, 8000);
+      clicked = true;
+      break;
+    }
+  }
+  
+  if (!clicked) {
+    throw new Error("『リストを開く』メニュー項目が見つかりませんでした");
+  }
 
-  const ok = await listAnyRow.isVisible().catch(() => false);
-  if (!ok) {
+  await page.waitForTimeout(1500);
+
+  // リスト一覧が表示されるのを待つ
+  const listVisible = await page.locator('div[data-role="list-item"], [role="option"]').first().isVisible({ timeout: 10000 }).catch(() => false);
+  if (!listVisible) {
     await safeScreenshot(page, "open_list_dialog_not_visible");
     throw new Error("『リストを開く…』後、一覧が表示されませんでした");
   }
@@ -565,23 +621,61 @@ async function switchWatchlistTo(page, listName) {
   console.log("Switching watchlist to:", listName);
 
   await handleUnexpectedDialogs(page);
-  await openListOpenDialog(page);
+  
+  // 既に目的のリストが選択されているか確認
+  const current = await getCurrentWatchlistTitle(page);
+  if (current === listName) {
+    console.log(`Already on watchlist: ${listName}`);
+    return;
+  }
 
-  const row = page.locator(`div[data-role="list-item"][data-title="${listName}"]`).first();
-  await row.waitFor({ state: "visible", timeout: 20000 });
+  // リスト選択ダイアログを開く（複数回リトライ）
+  let dialogOpened = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await openListOpenDialog(page);
+    const listDialog = page.locator('div[data-role="list"], div[class*="watchlists-list"], [role="listbox"]').first();
+    if (await listDialog.isVisible().catch(() => false)) {
+      dialogOpened = true;
+      break;
+    }
+    console.log(`List dialog not visible, retry ${attempt + 1}/3`);
+    await page.waitForTimeout(1000);
+  }
+  
+  if (!dialogOpened) {
+    throw new Error(`リスト選択ダイアログが開けませんでした: ${listName}`);
+  }
+
+  // 方法1: data-title 属性で探す（従来）
+  let row = page.locator(`div[data-role="list-item"][data-title="${listName}"]`).first();
+  
+  // 方法2: テキストで探す（フォールバック）
+  if (!(await row.isVisible().catch(() => false))) {
+    row = page.locator(`div[data-role="list-item"]:has-text("${listName}")`).first();
+  }
+  
+  // 方法3: より広いセレクタ（最終手段）
+  if (!(await row.isVisible().catch(() => false))) {
+    row = page.locator(`[role="option"], [role="listitem"]`).filter({ hasText: listName }).first();
+  }
+
+  await row.waitFor({ state: "visible", timeout: 15000 });
   await row.scrollIntoViewIfNeeded().catch(() => {});
   await row.click({ force: true, timeout: 8000 });
 
+  // ダイアログを閉じる
   await closeOpenListDialogIfVisible(page).catch(() => {});
   await closeAnyMenu(page);
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(1500);
 
+  // 切り替え確認（最大20秒待機）
   let ok = false;
   for (let i = 0; i < 20; i++) {
     const cur = await getCurrentWatchlistTitle(page);
-    if (cur.includes(listName)) {
+    console.log(`[switch] current="${cur}", target="${listName}"`);
+    if (cur === listName || cur.includes(listName)) {
       ok = true;
-      console.log("Watchlist switched:", cur);
+      console.log("Watchlist switched successfully:", cur);
       break;
     }
     await page.waitForTimeout(1000);
