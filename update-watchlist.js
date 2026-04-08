@@ -148,68 +148,86 @@ async function clickBestEffort(locator, timeout = 8000) {
 }
 
 // ==============================
-// Base UI: Watchlist panel / menu
+// Base UI: Watchlist panel / menu (改善版)
 // ==============================
 async function isWatchlistPanelReady(page) {
-  // パネルが開いている時に表示される具体的な要素をチェック
-  const panelIndicators = [
-    'div[data-name="watchlist-list"]',      // ウォッチリスト一覧のコンテナ
-    'div[data-role="list"]',                // リストロール
-    '[data-name="watchlists-list"]',
-    '.watchlist-panel',
-    'div[class*="watchlist"] >> text=/ウォッチリスト|Watchlist/i'
+  // パネルが開いている時の確実な指標
+  const indicators = [
+    'button[data-name="watchlists-button"][aria-expanded="true"]',
+    'div[data-role="list"]',               // リストコンテナ
+    'div[data-name="watchlist-list"]',
+    '[role="tabpanel"]',                   // サイドバーのタブパネル
+    'text=ウォッチリスト',
+    'text=Watchlist'
   ];
   
-  for (const sel of panelIndicators) {
+  for (const sel of indicators) {
     const el = page.locator(sel).first();
     if (await el.isVisible().catch(() => false)) return true;
   }
-  
-  // フォールバック：従来のボタン（ただし信頼性低い）
-  const menuButton = page.locator('button[data-name="watchlists-button"]').first();
-  return await menuButton.isVisible().catch(() => false);
+  return false;
 }
 
 async function openWatchlistPanel(page) {
-  // 既に開いていれば何もしない
+  // 既に開いていれば終了
   if (await isWatchlistPanelReady(page)) return;
   
-  const candidates = [
-    page.locator('button[aria-label="ウォッチリスト、詳細、ニュース"]').first(),
-    page.locator('button[aria-label="Watchlist, details and news"]').first(),
-    page.locator('button[data-tooltip="ウォッチリスト、詳細、ニュース"]').first(),
-    page.locator('button[data-tooltip="Watchlist, details and news"]').first(),
-    page.locator('button[data-name="watchlists-button"]').first(),
-  ];
-  
-  for (let attempt = 0; attempt < 4; attempt++) {
-    for (const c of candidates) {
-      if (!(await c.isVisible().catch(() => false))) continue;
-      const clicked = await clickBestEffort(c, { timeout: 6000, force: true });
-      if (!clicked) continue;
-      
-      // パネルが開くのを待つ（最大8秒）
-      for (let wait = 0; wait < 16; wait++) {
-        await page.waitForTimeout(500);
-        if (await isWatchlistPanelReady(page)) return;
-      }
-    }
-    await page.waitForTimeout(500);
+  // ウォッチリストボタンを特定
+  const btn = page.locator('button[data-name="watchlists-button"]').first();
+  if (!await btn.isVisible().catch(() => false)) {
+    throw new Error("ウォッチリストボタンが見つかりません");
   }
   
-  await safeScreenshot(page, "watchlist_panel_not_ready");
-  throw new Error("ウォッチリストパネルを開けませんでした");
+  // 現在の状態を取得
+  const beforeExpanded = await btn.getAttribute('aria-expanded').catch(() => 'false');
+  
+  // クリック
+  await btn.click({ force: true });
+  
+  // aria-expanded が 'true' になるのを待機 (最大10秒)
+  try {
+    await page.waitForFunction(
+      (button) => button.getAttribute('aria-expanded') === 'true',
+      btn,
+      { timeout: 10000 }
+    );
+  } catch (e) {
+    // 属性変更が検出できなくても、パネルが表示されていればOK
+    if (!await isWatchlistPanelReady(page)) {
+      throw new Error("ウォッチリストパネルが開きませんでした (aria-expanded待機失敗)");
+    }
+  }
+  
+  // パネル内のリスト表示を少し待つ
+  await page.waitForTimeout(1500);
 }
 
 async function ensureWatchlistPanelOpen(page) {
-  if (await isWatchlistPanelReady(page)) return;
-
-  await openWatchlistPanel(page);
-
-  if (await isWatchlistPanelReady(page)) return;
-
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (await isWatchlistPanelReady(page)) return;
+    
+    // 既存のメニューやダイアログを閉じる
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(500);
+    
+    await openWatchlistPanel(page);
+    
+    if (await isWatchlistPanelReady(page)) return;
+    
+    console.log(`パネルを開けませんでした。リトライ ${attempt + 1}/3`);
+    await page.waitForTimeout(2000);
+  }
+  
   await safeScreenshot(page, "watchlist_panel_not_open");
   throw new Error("ウォッチリストパネルを開けませんでした");
+}
+
+async function waitForTradingViewReady(page) {
+  // チャートが表示されるのを待機
+  await page.locator('[data-name="chart"]').first().waitFor({ state: 'visible', timeout: 30000 }).catch(() => {});
+  // ウォッチリストボタンが表示されるのを待機
+  await page.locator('button[data-name="watchlists-button"]').first().waitFor({ state: 'visible', timeout: 30000 });
+  await page.waitForTimeout(3000); // UI安定待ち
 }
 
 async function getWatchlistMenuTrigger(page) {
@@ -433,7 +451,8 @@ async function assertWatchlistExists(page, listName) {
 async function deleteManagedWatchlistsByPrefix(page, prefix) {
   console.log(`Deleting watchlists with prefix: ${prefix}`);
   
-  // 確実にパネルを開いておく
+  // 余計なメニューを閉じてからパネルを開く
+  await closeAnyMenu(page);
   await ensureWatchlistPanelOpen(page);
   await page.waitForTimeout(1000);
 
@@ -1954,7 +1973,7 @@ async function dumpAlertTickerTexts(page) {
     console.log("Opening TradingView...");
     await page.goto("https://www.tradingview.com/chart/", { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle").catch(() => {});
-    await page.waitForTimeout(8000);
+    await waitForTradingViewReady(page);  // ← 追加
 
     const needLogin = await page.getByText(/Sign in|ログイン/i).first().isVisible().catch(() => false);
     if (needLogin) {
