@@ -1074,64 +1074,66 @@ async function deleteManagedAlerts(page, prefixes) {
  */
 async function openWatchlistMenuHard(page, retryCount = 8) {
   const buttonSelector = 'button[data-name="watchlists-button"]';
-  const arrowSelector = '.arrow-merBkM5y, .arrowWrap-merBkM5y'; // 矢印部分を特定
+  // 提供いただいたHTMLから判明した「正解のメニューセレクタ」
+  const menuSelector = '[data-qa-id="active-watchlist-menu"]';
+  const menuInnerSelector = '[data-qa-id="menu-inner"]';
 
   for (let i = 0; i < retryCount; i++) {
     try {
       console.log(`[menu] ウォッチリストメニューを開こうとしています... (試行 ${i + 1}/${retryCount})`);
 
+      // 既にメニューが開いているかチェック（二重クリック防止）
+      if (await page.locator(menuSelector).isVisible()) {
+        console.log('[menu] メニューは既に開いています。');
+        return true;
+      }
+
       const button = page.locator(buttonSelector).first();
       await button.waitFor({ state: 'visible', timeout: 5000 });
 
-      // 1. 矢印部分を優先的に狙う（なければボタン本体）
-      const arrow = button.locator(arrowSelector).first();
-      const target = (await arrow.isVisible()) ? arrow : button;
+      // 1. 通常クリックを試行
+      // 手動でどこを押しても開くとのことなので、まずはボタン中央をクリック
+      await button.click({ delay: 50 });
 
-      // 2. 「人間らしいクリック」を再現（マウスダウンとアップの間に遊びを作る）
-      const box = await target.boundingBox();
-      if (box) {
-        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-        await page.mouse.down();
-        await page.waitForTimeout(100); // 0.1秒押し込む
-        await page.mouse.up();
-      } else {
-        // ボックスが取れない場合は強制クリック
-        await target.click({ force: true, delay: 100 });
-      }
-
-      // 3. メニューが出現したか確認
-      // TradingViewのメニューは DOMの末尾に「portal」として生成されることが多いです
+      // 2. メニューが出現したか「確定した属性」で判定
       try {
-        // [role="menu"] または クラス名に "menu" を含む要素を待機
-        await page.waitForSelector('[role="menu"], [data-name="menu-inner"], .menu-pS_296_R', { 
-          state: 'visible', 
-          timeout: 2500 
-        });
-        console.log('[menu] メニューが正常に開きました。');
+        await page.waitForSelector(menuSelector, { state: 'visible', timeout: 2500 });
+        // 中身（menu-inner）もしっかり描画されるまで待機
+        await page.waitForSelector(menuInnerSelector, { state: 'visible', timeout: 1000 });
+        
+        console.log('[menu] メニューの出現を確定しました。');
         return true;
       } catch (e) {
-        console.warn(`[menu] メニューが確認できません。JSイベントで強制発火を試みます...`);
-        // 4. 最終手段：要素に対して直接Clickイベントをディスパッチ
-        await target.evaluate((el) => {
+        console.warn(`[menu] 通常クリックでメニューが確認できません。強制発火を試みます...`);
+        
+        // 3. バックアップ：座標指定クリック（右端の矢印付近を狙う）
+        const box = await button.boundingBox();
+        if (box) {
+          await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2);
+        }
+        
+        // 4. 最終手段：JavaScriptでの直接イベント発火
+        await button.evaluate(el => {
           el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
           el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
           el.click();
         });
-        
-        // 再度メニュー確認
+
+        // 判定
         await page.waitForTimeout(1000);
-        const menuVisible = await page.locator('[role="menu"], [data-name="menu-inner"]').first().isVisible();
-        if (menuVisible) return true;
+        if (await page.locator(menuSelector).isVisible()) {
+          console.log('[menu] 強制発火によりメニューが開きました。');
+          return true;
+        }
       }
 
     } catch (err) {
-      console.error(`[menu] エラー発生: ${err.message}`);
+      console.error(`[menu] 試行 ${i + 1} 中にエラー: ${err.message}`);
     }
-    await page.waitForTimeout(1500); // 失敗時は長めに待機してリトライ
+    await page.waitForTimeout(1000);
   }
-  throw new Error('ウォッチリストメニューを規定回数内に開けませんでした。');
+  throw new Error('ウォッチリストメニューを規定回数内に開けませんでした。判定用セレクタが正しいか再確認が必要です。');
 }
-
 // ==============================
 // Watchlist alert promo dialog
 // ==============================
