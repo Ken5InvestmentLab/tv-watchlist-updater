@@ -171,6 +171,54 @@ async function getWatchlistButton(page) {
   return null;
 }
 
+// ウォッチリストのメニューを開くボタン（3点リーダーなど）を取得
+async function getWatchlistMenuTrigger(page) {
+  const candidates = [
+    'button[data-name="watchlist-menu-button"]',
+    'button[aria-label*="More" i]',
+    'button[aria-label*="その他"]',
+    'button[data-tooltip*="More" i]',
+    'button[data-tooltip*="その他"]',
+    'button[aria-haspopup="menu"][data-name*="menu"]',
+    'button[aria-label*="Watchlist menu"]',
+    'button[aria-label*="ウォッチリストメニュー"]',
+  ];
+  
+  for (const sel of candidates) {
+    const btn = page.locator(sel).first();
+    if (await btn.isVisible().catch(() => false)) {
+      return btn;
+    }
+  }
+  
+  // フォールバック: ウォッチリストパネル内の何らかのボタン
+  const panel = await getWatchlistButton(page);
+  if (panel) {
+    const parent = panel.locator('xpath=ancestor::*[contains(@class,"watchlist")]').first();
+    const menuBtn = parent.locator('button').filter({ hasText: /•••|...|▼|⌄/i }).first();
+    if (await menuBtn.isVisible().catch(() => false)) return menuBtn;
+  }
+  
+  return null;
+}
+
+// 現在選択中のウォッチリスト名を取得
+async function getCurrentWatchlistTitle(page) {
+  const btn = await getWatchlistButton(page);
+  if (!btn) return "";
+  
+  const text = ((await btn.textContent().catch(() => "")) || "").trim();
+  // アイコンなどが含まれる場合があるので、最初の単語または改行で区切る
+  const lines = text.split(/\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed && !trimmed.match(/^[0-9]+$/)) {
+      return trimmed;
+    }
+  }
+  return text;
+}
+
 // パネルが開いているか（aria-pressed または実際のリスト要素で判定）
 async function isWatchlistPanelReady(page) {
   // 方法1: ボタンの aria-pressed 属性
