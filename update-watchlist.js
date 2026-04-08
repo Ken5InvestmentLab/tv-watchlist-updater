@@ -618,86 +618,93 @@ async function assertWatchlistExists(page, listName) {
 // ==============================
 // Delete watchlists
 // ==============================
+/**
+ * 指定したプレフィックスを持つウォッチリストを削除する関数
+ */
 async function deleteManagedWatchlistsByPrefix(page, prefix) {
-  console.log(`Deleting watchlists with prefix: ${prefix}`);
-  
-  // 余計なメニューを閉じてからパネルを開く
-  await closeAnyMenu(page);
-  await ensureWatchlistPanelOpen(page);
-  await page.waitForTimeout(1000);
+  console.log(`[delete] "${prefix}" で始まるウォッチリストを削除します...`);
 
-  await openListOpenDialog(page);
+  // メニューが開いていない場合は開く
+  await openWatchlistMenuHard(page);
 
-  for (let round = 0; round < 80; round++) {
-    await handleUnexpectedDialogs(page);
-    const rows = page.locator('div[data-role="list-item"][data-title]');
-    const count = await rows.count().catch(() => 0);
+  // 提供いただいたHTML構造に基づき、メニュー内の全アイテムを取得
+  // data-qa-id="menu-inner" の中にあるリスト名をスキャン
+  const listItems = page.locator('[data-qa-id="menu-inner"] [class*="item-"]');
+  const count = await listItems.count();
+  let deletedAny = false;
 
-    let targetName = "";
-
-    for (let i = 0; i < count; i++) {
-      const row = rows.nth(i);
-      const dataTitle = ((await row.getAttribute("data-title").catch(() => "")) || "").trim();
-      const fallbackText = ((await row.textContent().catch(() => "")) || "").trim();
-      const text = dataTitle || fallbackText;
-
-      if (!isManagedListName(text, prefix)) continue;
-      targetName = text;
-      break;
-    }
-
-    if (!targetName) {
-      console.log(`No more managed watchlists for prefix: ${prefix}`);
-      await closeOpenListDialogIfVisible(page).catch(() => {});
-      await closeAnyMenu(page);
-      return;
-    }
-
-    console.log(`Deleting watchlist: ${targetName}`);
-
-    const row = page.locator(`div[data-role="list-item"][data-title="${targetName}"]`).first();
-    const deleteBtn = row.locator('[data-name="remove-button"]').first();
-
-    await row.hover().catch(() => {});
-    await page.waitForTimeout(300);
-
-    const clicked = await safeClick(deleteBtn, { timeout: 8000, force: true });
-    if (!clicked) {
-      await safeScreenshot(page, `watchlist_delete_btn_not_found_${targetName}`);
-      throw new Error(`ウォッチリスト削除ボタンが見つかりませんでした: ${targetName}`);
-    }
-
-    const confirm = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
-    const confirmOk = await safeClick(confirm, { timeout: 8000, force: true });
-
-    if (!confirmOk) {
-      await safeScreenshot(page, `watchlist_delete_confirm_not_found_${targetName}`);
-      throw new Error(`ウォッチリスト削除確認ボタンが押せませんでした: ${targetName}`);
-    }
-
-    let deleted = false;
-    for (let i = 0; i < 10; i++) {
-      await page.waitForTimeout(800);
-
-      const stillExists = await page
-        .locator(`div[data-role="list-item"][data-title="${targetName}"]`)
-        .first()
-        .isVisible()
-        .catch(() => false);
-
-      if (!stillExists) {
-        deleted = true;
-        break;
-      }
-    }
-
-    if (!deleted) {
-      await safeScreenshot(page, `watchlist_delete_not_reflected_${targetName}`);
-      throw new Error(`ウォッチリスト削除後も残っています: ${targetName}`);
+  const targets = [];
+  for (let i = 0; i < count; i++) {
+    const text = await listItems.nth(i).innerText();
+    if (text.trim().startsWith(prefix)) {
+      targets.push(text.trim());
     }
   }
 
-  throw new Error(`ウォッチリスト削除ループが上限に達しました: ${prefix}`);
+  console.log(`[delete] 削除対象: ${targets.length}件 (${targets.join(', ')})`);
+
+  for (const targetName of targets) {
+    console.log(`[delete] "${targetName}" を削除中...`);
+
+    // 再度メニューを開く（削除ごとにメニューが閉じる場合があるため）
+    await openWatchlistMenuHard(page);
+
+    // ターゲットの行を特定し、その中にある「×」ボタン（削除ボタン）をクリック
+    const row = page.locator(`[data-qa-id="menu-inner"] [class*="item-"]:has-text("${targetName}")`).first();
+    
+    // TradingViewの削除ボタンはホバーしないと出ない場合があるため、まずホバー
+    await row.hover();
+    
+    // 削除ボタン（通常は aria-label="削除" や data-name="delete-button" など）
+    const deleteBtn = row.locator('button[data-name="remove-button"], [data-name="delete-button"], [aria-label*="削除"], [aria-label*="Remove"]').first();
+    
+    await deleteBtn.click({ force: true });
+
+    // --- ここが今回のエラーの核心：確認ダイアログの処理 ---
+    await confirmTradingViewDialog(page);
+    
+    deletedAny = true;
+    await page.waitForTimeout(1000); // 処理安定のための待機
+  }
+
+  if (!deletedAny) {
+    console.log(`[delete] "${prefix}" に一致するリストはありませんでした。`);
+  }
+}
+
+/**
+ * TradingViewの確認ダイアログ（「本当に削除しますか？」等）を確実に承認する関数
+ */
+async function confirmTradingViewDialog(page) {
+  console.log("[dialog] 確認ダイアログを待機中...");
+
+  // 1. ダイアログ要素そのものを特定（この中にあるボタンしかクリックしない）
+  const dialog = page.locator('[role="dialog"], [class*="dialog-"], .tv-dialog').last();
+
+  try {
+    // 2. ダイアログが表示されるのを待つ
+    await dialog.waitFor({ state: 'visible', timeout: 5000 });
+
+    // 3. マグネットボタン（画面左側）との誤認を避けるため、
+    // ダイアログ内の「削除」「Yes」「OK」などのテキストを持つボタンを厳格に指定
+    const okButton = dialog.locator('button').filter({ 
+      hasText: /^(削除|はい|Yes|OK|Yes, delete)$/i 
+    }).first();
+
+    // 4. 背景の膜（backdrop）に邪魔されてもクリックできる文字通り「強制クリック」
+    await okButton.click({ force: true, timeout: 5000 });
+    console.log("[dialog] 削除を承認しました。");
+  } catch (e) {
+    // ダイアログが出なかった場合は、既に削除されているか、ボタン名が違う可能性がある
+    console.warn(`[dialog] 確認ボタンが見つかりません: ${e.message}`);
+    
+    // バックアップ手段: data-name="ok" を探す
+    const backupBtn = page.locator('[data-name="ok"], [data-name="yes"]').first();
+    if (await backupBtn.isVisible()) {
+      await backupBtn.click({ force: true });
+      console.log("[dialog] バックアップボタンで承認しました。");
+    }
+  }
 }
 
 // ==============================
