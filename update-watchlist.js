@@ -148,65 +148,93 @@ async function clickBestEffort(locator, timeout = 8000) {
 }
 
 // ==============================
-// Base UI: Watchlist panel / menu (改善版)
+// Base UI: Watchlist panel / menu (UI変更に強い版)
 // ==============================
-async function isWatchlistPanelReady(page) {
-  // パネルが開いている時の確実な指標
-  const indicators = [
-    'button[data-name="watchlists-button"][aria-expanded="true"]',
-    'div[data-role="list"]',               // リストコンテナ
-    'div[data-name="watchlist-list"]',
-    '[role="tabpanel"]',                   // サイドバーのタブパネル
-    'text=ウォッチリスト',
-    'text=Watchlist'
+
+// ウォッチリストボタンを取得（複数の候補から）
+async function getWatchlistButton(page) {
+  const candidates = [
+    'button[aria-label*="ウォッチリスト"]',
+    'button[aria-label*="Watchlist"]',
+    'button[data-tooltip*="ウォッチリスト"]',
+    'button[data-tooltip*="Watchlist"]',
+    'button[data-name="watchlists-button"]',  // 旧形式フォールバック
+    'button[data-name="base"][aria-label*="ウォッチリスト"]',
   ];
   
-  for (const sel of indicators) {
-    const el = page.locator(sel).first();
-    if (await el.isVisible().catch(() => false)) return true;
+  for (const sel of candidates) {
+    const btn = page.locator(sel).first();
+    if (await btn.isVisible().catch(() => false)) {
+      return btn;
+    }
   }
-  return false;
+  return null;
 }
 
-async function openWatchlistPanel(page) {
-  // 既に開いていれば終了
-  if (await isWatchlistPanelReady(page)) return;
-  
-  // ウォッチリストボタンを特定
-  const btn = page.locator('button[data-name="watchlists-button"]').first();
-  if (!await btn.isVisible().catch(() => false)) {
-    throw new Error("ウォッチリストボタンが見つかりません");
+// パネルが開いているか（aria-pressed または実際のリスト要素で判定）
+async function isWatchlistPanelReady(page) {
+  // 方法1: ボタンの aria-pressed 属性
+  const btn = await getWatchlistButton(page);
+  if (btn) {
+    const pressed = await btn.getAttribute('aria-pressed');
+    if (pressed === 'true') return true;
   }
   
-  // 現在の状態を取得
-  const beforeExpanded = await btn.getAttribute('aria-expanded').catch(() => 'false');
+  // 方法2: パネル内の実際の要素
+  const panelIndicators = [
+    'div[data-role="list"]',               // リストコンテナ
+    'div[data-name="watchlist-list"]',
+    '[role="tabpanel"]',
+    'div[class*="watchlist"]',
+  ];
   
-  // クリック
-  await btn.click({ force: true });
-  
-  // aria-expanded が 'true' になるのを待機 (最大10秒)
-  try {
-    await page.waitForFunction(
-      (button) => button.getAttribute('aria-expanded') === 'true',
-      btn,
-      { timeout: 10000 }
-    );
-  } catch (e) {
-    // 属性変更が検出できなくても、パネルが表示されていればOK
-    if (!await isWatchlistPanelReady(page)) {
-      throw new Error("ウォッチリストパネルが開きませんでした (aria-expanded待機失敗)");
+  for (const sel of panelIndicators) {
+    if (await page.locator(sel).first().isVisible().catch(() => false)) {
+      return true;
     }
   }
   
-  // パネル内のリスト表示を少し待つ
-  await page.waitForTimeout(1500);
+  return false;
+}
+
+// ウォッチリストパネルを開く（閉じている場合のみ）
+async function openWatchlistPanel(page) {
+  if (await isWatchlistPanelReady(page)) return;
+  
+  const btn = await getWatchlistButton(page);
+  if (!btn) {
+    await safeScreenshot(page, "watchlist_button_not_found");
+    throw new Error("ウォッチリストボタンが見つかりません");
+  }
+  
+  // クリック前の状態
+  const beforePressed = await btn.getAttribute('aria-pressed');
+  
+  await btn.click({ force: true });
+  await page.waitForTimeout(500);
+  
+  // aria-pressed が 'true' になるのを待機（最大5秒）
+  try {
+    await page.waitForFunction(
+      (button) => button.getAttribute('aria-pressed') === 'true',
+      btn,
+      { timeout: 5000 }
+    );
+  } catch (e) {
+    // 属性変化がなくてもパネルが表示されていればOK
+    if (!await isWatchlistPanelReady(page)) {
+      throw new Error("ウォッチリストパネルが開きませんでした");
+    }
+  }
+  
+  await page.waitForTimeout(800);
 }
 
 async function ensureWatchlistPanelOpen(page) {
   for (let attempt = 0; attempt < 3; attempt++) {
     if (await isWatchlistPanelReady(page)) return;
     
-    // 既存のメニューやダイアログを閉じる
+    // 余計なメニューを閉じてからリトライ
     await page.keyboard.press('Escape');
     await page.waitForTimeout(500);
     
@@ -214,101 +242,43 @@ async function ensureWatchlistPanelOpen(page) {
     
     if (await isWatchlistPanelReady(page)) return;
     
-    console.log(`パネルを開けませんでした。リトライ ${attempt + 1}/3`);
-    await page.waitForTimeout(2000);
+    console.log(`パネルオープンリトライ ${attempt + 1}/3`);
   }
   
   await safeScreenshot(page, "watchlist_panel_not_open");
   throw new Error("ウォッチリストパネルを開けませんでした");
 }
 
+// ページ準備完了待機（複数セレクタで待つ）
 async function waitForTradingViewReady(page) {
-  // チャートが表示されるのを待機
-  await page.locator('[data-name="chart"]').first().waitFor({ state: 'visible', timeout: 30000 }).catch(() => {});
-  // ウォッチリストボタンが表示されるのを待機
-  await page.locator('button[data-name="watchlists-button"]').first().waitFor({ state: 'visible', timeout: 30000 });
-  await page.waitForTimeout(3000); // UI安定待ち
-}
-
-async function getWatchlistMenuTrigger(page) {
-  const candidates = [
-    page.locator('button[data-name="watchlists-button"] [class*="arrow"]').first(),
-    page.locator('button[data-name="watchlists-button"] [class*="caret"]').first(),
-    page.locator('button[data-name="watchlists-button"] svg').last(),
+  const selectors = [
+    'button[aria-label*="ウォッチリスト"]',
+    'button[aria-label*="Watchlist"]',
+    '[data-name="chart"]',
+    'canvas',
   ];
-
-  for (const c of candidates) {
-    if (await c.isVisible().catch(() => false)) return c;
-  }
-
-  return null;
-}
-
-async function openWatchlistMenuHard(page, retry = 8) {
-  await ensureWatchlistPanelOpen(page);
-
-  for (let i = 0; i < retry; i++) {
-    await closeAnyMenu(page);
-    await page.waitForTimeout(300);
-
-    const btn = await getWatchlistMenuTrigger(page);
-    if (!btn) {
-      await page.waitForTimeout(600);
-      continue;
+  
+  let found = false;
+  for (const sel of selectors) {
+    if (await page.locator(sel).first().isVisible({ timeout: 5000 }).catch(() => false)) {
+      found = true;
+      break;
     }
-
-    const ok = await clickBestEffort(btn, 8000);
-    if (!ok) continue;
-
-    await page.waitForTimeout(900);
-
-    const root = await getVisibleWatchlistMenuRoot(page);
-    if (root) {
-      console.log(`watchlist menu opened. retry=${i + 1}`);
-      return true;
-    }
-
-    console.log(`watchlist menu not actually opened. retry=${i + 1}`);
-    await page.waitForTimeout(600);
   }
-
-  await safeScreenshot(page, "watchlist_menu_not_opened");
-  return false;
-}
-
-
-
-async function closeAnyMenu(page) {
-  await page.keyboard.press("Escape").catch(() => {});
-  await page.waitForTimeout(200);
-  await page.keyboard.press("Escape").catch(() => {});
-  await page.waitForTimeout(250);
-}
-
-async function getVisibleWatchlistMenuRoot(page) {
-  const re =
-    /リストに(高度な)?アラートを追加|リストを開く|リストをアップロード|Open list|Upload list|Add( advanced)? alert/i;
-
-  const roots = [
-    page.locator('[role="menu"]').filter({ hasText: re }),
-    page.locator('div[data-name="menu-inner"]').filter({ hasText: re }),
-    page.locator('div[class*="menu"]').filter({ hasText: re }),
-  ];
-
-  for (const root of roots) {
-    const el = await firstVisible(root, 10);
-    if (el) return el;
+  
+  if (!found) {
+    await safeScreenshot(page, "tradingview_not_ready");
+    throw new Error("TradingViewのUIが読み込まれませんでした");
   }
-  return null;
-}
-
-async function getCurrentWatchlistTitle(page) {
-  const t = await page
-    .locator('button[data-name="watchlists-button"]')
-    .first()
-    .textContent()
-    .catch(() => "");
-  return (t || "").trim();
+  
+  // ウォッチリストボタンが表示されるのを待つ
+  const btn = await getWatchlistButton(page);
+  if (!btn) {
+    await safeScreenshot(page, "watchlist_button_missing");
+    throw new Error("ウォッチリストボタンが見つかりません（タイムアウト）");
+  }
+  
+  await page.waitForTimeout(2000);
 }
 
 // ==============================
@@ -1973,12 +1943,13 @@ async function dumpAlertTickerTexts(page) {
     console.log("Opening TradingView...");
     await page.goto("https://www.tradingview.com/chart/", { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle").catch(() => {});
-    await waitForTradingViewReady(page);  // ← 追加
+    await waitForTradingViewReady(page);  // 新しい関数を使用
 
+    // ログイン状態確認（必要に応じて）
     const needLogin = await page.getByText(/Sign in|ログイン/i).first().isVisible().catch(() => false);
     if (needLogin) {
       await safeScreenshot(page, "need_login");
-      throw new Error("TradingView がログイン状態ではありません（storageState が無効/期限切れの可能性）");
+      throw new Error("TradingView がログイン状態ではありません");
     }
 
     if (DO_DELETE_ALERTS) {
