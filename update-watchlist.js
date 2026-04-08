@@ -275,40 +275,38 @@ async function getCurrentWatchlistTitle(page) {
   const btn = await getWatchlistButton(page);
   if (!btn) return "";
 
-  // 方法1: aria-label から正規表現で抽出（最も信頼性が高い）
+  // aria-label から抽出
   const ariaLabel = await btn.getAttribute('aria-label');
   if (ariaLabel) {
-    const match = ariaLabel.match(/(wl[12]_\d{8}_\d{4})/);
+    const match = ariaLabel.match(/(w[al]?[12]?_\d{8}_\d{4})/);
     if (match) return match[1];
   }
 
-  // 方法2: ボタン内の特定のクラス（TradingView の最近の変更に対応）
+  // ボタン内の特定クラス
   const nameSelectors = [
     '[class*="watchlistName"]',
     '[class*="name"]',
     '[data-role="watchlist-name"]',
-    'span[class*="title"]',
-    'div[class*="selected"]'
+    'span[class*="title"]'
   ];
-  
   for (const sel of nameSelectors) {
     const el = btn.locator(sel).first();
     if (await el.isVisible().catch(() => false)) {
       const text = await el.textContent();
       if (text && text.trim()) {
-        const match = text.trim().match(/(wl[12]_\d{8}_\d{4})/);
+        const match = text.trim().match(/(w[al]?[12]?_\d{8}_\d{4})/);
         if (match) return match[1];
         return text.trim();
       }
     }
   }
 
-  // 方法3: ボタン全体のテキストから正規表現で抽出
+  // ボタン全体のテキストから抽出
   const fullText = await btn.evaluate(el => el.innerText || el.textContent || "");
-  const match = fullText.match(/(wl[12]_\d{8}_\d{4})/);
+  const match = fullText.match(/(w[al]?[12]?_\d{8}_\d{4})/);
   if (match) return match[1];
 
-  // 方法4: 従来のトークン分割（フォールバック）
+  // 従来のトークン分割（フォールバック）
   const tokens = fullText.split(/\s+/).filter(t => t && !t.match(/[▼⌄↓▶›»]/));
   return tokens[0] || "";
 }
@@ -543,49 +541,47 @@ async function clickMenuItemByText(page, re) {
 // Open list dialog / switch list
 // ==============================
 async function openListOpenDialog(page) {
-  // 既にリスト一覧が表示されているか確認
-  const listAnyRow = page.locator('div[data-role="list-item"], [role="option"], [class*="watchlist-item"]').first();
-  if (await listAnyRow.isVisible().catch(() => false)) {
-    console.log("List dialog already open");
+  // 新しいUI: メニュー内に直接リスト一覧が表示されている場合は何もしない
+  const directListItems = page.locator('[data-qa-id="menu-inner"] [class*="item-"], [role="menuitem"][data-role="list-item"], div[data-role="list-item"]');
+  if (await directListItems.first().isVisible().catch(() => false)) {
+    console.log("List dialog already open (direct items in menu)");
     return;
   }
 
-  // メニューを開く（最大3回リトライ）
-  let opened = false;
+  // 従来の「リストを開く」メニューを開く（旧UI用フォールバック）
   for (let attempt = 0; attempt < 3; attempt++) {
-    opened = await openWatchlistMenuHard(page, 8);
-    if (opened) break;
+    const opened = await openWatchlistMenuHard(page, 6);
+    if (!opened) {
+      await page.waitForTimeout(1000);
+      continue;
+    }
+
+    const openTexts = [/リストを開く/i, /Open list/i, /Manage watchlists/i, /すべてのリスト/i];
+    let clicked = false;
+    for (const re of openTexts) {
+      const item = await findMenuItemByText(page, re);
+      if (item) {
+        await clickBestEffort(item, 8000);
+        clicked = true;
+        break;
+      }
+    }
+    
+    if (clicked) {
+      await page.waitForTimeout(1500);
+      // ダイアログまたは新しいリスト一覧が表示されるのを待つ
+      const listVisible = await directListItems.first().isVisible({ timeout: 5000 }).catch(() => false);
+      if (listVisible) return;
+    }
+    
+    await closeAnyMenu(page);
     await page.waitForTimeout(1000);
   }
-  
-  if (!opened) {
-    throw new Error("ウォッチリストメニューが開けませんでした");
-  }
 
-  // 「リストを開く」メニューをクリック（複数のテキストバリエーションに対応）
-  const openTexts = [/リストを開く/i, /Open list/i, /Manage watchlists/i, /すべてのリスト/i];
-  let clicked = false;
-  
-  for (const re of openTexts) {
-    const item = await findMenuItemByText(page, re);
-    if (item) {
-      await clickBestEffort(item, 8000);
-      clicked = true;
-      break;
-    }
-  }
-  
-  if (!clicked) {
-    throw new Error("『リストを開く』メニュー項目が見つかりませんでした");
-  }
-
-  await page.waitForTimeout(1500);
-
-  // リスト一覧が表示されるのを待つ
-  const listVisible = await page.locator('div[data-role="list-item"], [role="option"]').first().isVisible({ timeout: 10000 }).catch(() => false);
-  if (!listVisible) {
+  // 最終確認：それでもリスト一覧が出ない場合はエラー
+  if (!(await directListItems.first().isVisible().catch(() => false))) {
     await safeScreenshot(page, "open_list_dialog_not_visible");
-    throw new Error("『リストを開く…』後、一覧が表示されませんでした");
+    throw new Error("リスト一覧を開けませんでした（新旧UIどちらにも対応できず）");
   }
 }
 
@@ -622,53 +618,46 @@ async function switchWatchlistTo(page, listName) {
 
   await handleUnexpectedDialogs(page);
   
-  // 既に目的のリストが選択されているか確認
+  // 既に目的のリストか確認
   const current = await getCurrentWatchlistTitle(page);
   if (current === listName) {
     console.log(`Already on watchlist: ${listName}`);
     return;
   }
 
-  // リスト選択ダイアログを開く（複数回リトライ）
-  let dialogOpened = false;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    await openListOpenDialog(page);
-    const listDialog = page.locator('div[data-role="list"], div[class*="watchlists-list"], [role="listbox"]').first();
-    if (await listDialog.isVisible().catch(() => false)) {
-      dialogOpened = true;
+  // リスト一覧を開く（新しいUIではメニュー内に直接表示）
+  await openListOpenDialog(page);
+
+  // リスト一覧の中から目的のリストをクリック
+  const selectors = [
+    `div[data-role="list-item"][data-title="${listName}"]`,
+    `[role="menuitem"]:has-text("${listName}")`,
+    `[data-qa-id="menu-inner"] [class*="item-"]:has-text("${listName}")`,
+    `div[data-role="list-item"]:has-text("${listName}")`
+  ];
+  
+  let row = null;
+  for (const sel of selectors) {
+    const r = page.locator(sel).first();
+    if (await r.isVisible().catch(() => false)) {
+      row = r;
       break;
     }
-    console.log(`List dialog not visible, retry ${attempt + 1}/3`);
-    await page.waitForTimeout(1000);
   }
   
-  if (!dialogOpened) {
-    throw new Error(`リスト選択ダイアログが開けませんでした: ${listName}`);
+  if (!row) {
+    await safeScreenshot(page, `watchlist_not_found_in_list_${listName}`);
+    throw new Error(`リスト一覧に "${listName}" が見つかりません`);
   }
 
-  // 方法1: data-title 属性で探す（従来）
-  let row = page.locator(`div[data-role="list-item"][data-title="${listName}"]`).first();
-  
-  // 方法2: テキストで探す（フォールバック）
-  if (!(await row.isVisible().catch(() => false))) {
-    row = page.locator(`div[data-role="list-item"]:has-text("${listName}")`).first();
-  }
-  
-  // 方法3: より広いセレクタ（最終手段）
-  if (!(await row.isVisible().catch(() => false))) {
-    row = page.locator(`[role="option"], [role="listitem"]`).filter({ hasText: listName }).first();
-  }
-
-  await row.waitFor({ state: "visible", timeout: 15000 });
-  await row.scrollIntoViewIfNeeded().catch(() => {});
   await row.click({ force: true, timeout: 8000 });
 
-  // ダイアログを閉じる
+  // ダイアログやメニューを閉じる
   await closeOpenListDialogIfVisible(page).catch(() => {});
   await closeAnyMenu(page);
   await page.waitForTimeout(1500);
 
-  // 切り替え確認（最大20秒待機）
+  // 切り替え確認（最大20秒）
   let ok = false;
   for (let i = 0; i < 20; i++) {
     const cur = await getCurrentWatchlistTitle(page);
@@ -712,11 +701,10 @@ async function assertWatchlistExists(page, listName) {
 // ==============================
 // Delete watchlists
 // ==============================
-/**
- * 指定したプレフィックスを持つウォッチリストを削除する関数
- */
 async function deleteManagedWatchlistsByPrefix(page, prefix) {
-  console.log(`[delete] "${prefix}" で始まるウォッチリストを削除します...`);
+  // プレフィックスのバリエーション（例: "wl1" → ["wl1", "w1"]）
+  const prefixes = [prefix, prefix.replace('l', '')];
+  console.log(`[delete] "${prefix}" で始まるウォッチリストを削除します（バリエーション: ${prefixes.join(', ')}）...`);
 
   // 削除対象のリスト名を収集
   let targets = [];
@@ -724,7 +712,7 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     await openWatchlistMenuHard(page, 6);
     await page.waitForTimeout(800);
 
-    // メニュー内の全リスト項目を取得（複数のセレクタでフォールバック）
+    // メニュー内の全リスト項目を取得
     const selectors = [
       '[data-qa-id="menu-inner"] [class*="item-"]',
       '[role="menuitem"][data-role="list-item"]',
@@ -750,8 +738,9 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     targets = [];
     for (let i = 0; i < count; i++) {
       const text = await listItems.nth(i).innerText().catch(() => "");
-      // プレフィックス一致（先頭一致、大文字小文字区別なし）
-      if (text.trim().toLowerCase().startsWith(prefix.toLowerCase())) {
+      // いずれかのプレフィックスで始まるかチェック
+      const matched = prefixes.some(p => text.trim().toLowerCase().startsWith(p.toLowerCase()));
+      if (matched) {
         targets.push({ element: listItems.nth(i), name: text.trim() });
       }
     }
@@ -773,19 +762,18 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
   for (const target of targets) {
     console.log(`[delete] "${target.name}" を削除中...`);
 
-    // メニューを開く（各削除前に確実に開く）
     await openWatchlistMenuHard(page, 6);
     await page.waitForTimeout(500);
 
-    // 対象の行を再度取得（要素が古くなっている可能性があるため）
+    // 対象の行を再度取得
     const row = page.locator(`[data-qa-id="menu-inner"] :has-text("${target.name}"), [role="menuitem"]:has-text("${target.name}")`).first();
     await row.waitFor({ state: "visible", timeout: 10000 });
 
-    // 行にホバーして削除ボタンを表示させる（TradingView の仕様）
+    // ホバーして削除ボタンを表示
     await row.hover();
     await page.waitForTimeout(500);
 
-    // 削除ボタン（ゴミ箱マーク）を探す - 複数のセレクタ
+    // 削除ボタン（ゴミ箱）を探す
     const deleteBtnSelectors = [
       'button[data-name="remove-button"]',
       'button[data-name="delete-button"]',
@@ -808,14 +796,13 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
       }
     }
     
-    // それでも見つからない場合、行全体からボタンらしいものを探す
     if (!deleteBtn) {
+      // フォールバック：行内のすべてのボタンをチェック
       const allButtons = row.locator('button');
       const btnCount = await allButtons.count();
       for (let i = 0; i < btnCount; i++) {
         const btn = allButtons.nth(i);
-        const isVisible = await btn.isVisible().catch(() => false);
-        if (isVisible) {
+        if (await btn.isVisible().catch(() => false)) {
           deleteBtn = btn;
           break;
         }
@@ -823,27 +810,22 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     }
 
     if (!deleteBtn) {
-      // フォールバック: 右クリック → 削除メニュー
-      console.log(`[delete] 削除ボタンが見つからないため、右クリックメニューを使用します: ${target.name}`);
+      console.log(`[delete] 削除ボタンが見つからないため、右クリックメニューを使用: ${target.name}`);
       await row.click({ button: "right", force: true });
       await page.waitForTimeout(500);
       const delMenuItem = page.locator('[role="menuitem"]:has-text("削除"), [role="menuitem"]:has-text("Delete")').first();
       if (await delMenuItem.isVisible().catch(() => false)) {
         await delMenuItem.click({ force: true });
       } else {
-        throw new Error(`削除ボタンも右クリックメニューも使えませんでした: ${target.name}`);
+        throw new Error(`削除ボタンも右クリックメニューも使えません: ${target.name}`);
       }
     } else {
       await deleteBtn.click({ force: true });
     }
 
     await page.waitForTimeout(500);
-    
-    // 確認ダイアログを処理
     await confirmTradingViewDialog(page);
     await page.waitForTimeout(1000);
-
-    // メニューを閉じる
     await closeAnyMenu(page);
     await page.waitForTimeout(500);
   }
