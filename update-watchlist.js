@@ -702,53 +702,73 @@ async function assertWatchlistExists(page, listName) {
 // Delete watchlists
 // ==============================
 async function deleteManagedWatchlistsByPrefix(page, prefix) {
-  // プレフィックスのバリエーション（例: "wl1" → ["wl1", "w1"]）
   const prefixes = [prefix, prefix.replace('l', '')];
   console.log(`[delete] "${prefix}" で始まるウォッチリストを削除します（バリエーション: ${prefixes.join(', ')}）...`);
 
-  // 削除対象のリスト名を収集
+  // 削除対象を収集（スクロールしながら全項目を取得）
   let targets = [];
-  for (let retry = 0; retry < 3; retry++) {
+  let retryCount = 0;
+  const maxRetries = 3;
+
+  while (retryCount < maxRetries && targets.length === 0) {
     await openWatchlistMenuHard(page, 6);
     await page.waitForTimeout(800);
 
-    // メニュー内の全リスト項目を取得
-    const selectors = [
-      '[data-qa-id="menu-inner"] [class*="item-"]',
-      '[role="menuitem"][data-role="list-item"]',
-      'div[data-role="list-item"]',
-      '[data-qa-id="menu-inner"] > div'
-    ];
-    let listItems = null;
-    for (const sel of selectors) {
-      const items = page.locator(sel);
-      if ((await items.count()) > 0) {
-        listItems = items;
-        break;
-      }
-    }
-    if (!listItems) {
-      console.log(`[delete] リスト項目が見つかりません。リトライ ${retry + 1}/3`);
+    // メニュー内のスクロール可能なコンテナを特定
+    const menuContainer = page.locator('[data-qa-id="menu-inner"], [role="menu"], div[class*="menu"]').first();
+    if (!(await menuContainer.isVisible().catch(() => false))) {
+      console.log(`[delete] メニューコンテナが見つかりません。リトライ ${retryCount + 1}/${maxRetries}`);
       await closeAnyMenu(page);
       await page.waitForTimeout(1000);
+      retryCount++;
       continue;
     }
 
-    const count = await listItems.count();
-    targets = [];
-    for (let i = 0; i < count; i++) {
-      const text = await listItems.nth(i).innerText().catch(() => "");
-      // いずれかのプレフィックスで始まるかチェック
-      const matched = prefixes.some(p => text.trim().toLowerCase().startsWith(p.toLowerCase()));
-      if (matched) {
-        targets.push({ element: listItems.nth(i), name: text.trim() });
+    // スクロールして全項目を収集（最大10回スクロール）
+    const allItemTexts = new Set();
+    let previousCount = 0;
+    let scrollAttempts = 0;
+    const maxScrolls = 10;
+
+    while (scrollAttempts < maxScrolls) {
+      const items = page.locator('[data-qa-id="menu-inner"] [class*="item-"], [role="menuitem"][data-role="list-item"], div[data-role="list-item"]');
+      const currentCount = await items.count();
+      
+      // 現在表示されている項目のテキストを収集
+      for (let i = 0; i < currentCount; i++) {
+        const text = await items.nth(i).innerText().catch(() => "");
+        if (text && text.trim()) {
+          allItemTexts.add(text.trim());
+        }
       }
+      
+      if (currentCount === previousCount && scrollAttempts > 0) {
+        // 項目数が増えなくなったら終了
+        break;
+      }
+      previousCount = currentCount;
+      
+      // スクロール
+      await menuContainer.evaluate(el => { el.scrollTop += 300; }).catch(() => {});
+      await page.waitForTimeout(500);
+      scrollAttempts++;
+    }
+
+    // 収集したテキストから対象を抽出
+    const matchedNames = Array.from(allItemTexts).filter(name => 
+      prefixes.some(p => name.toLowerCase().startsWith(p.toLowerCase()))
+    );
+    
+    if (matchedNames.length > 0) {
+      targets = matchedNames.map(name => ({ name }));
+      console.log(`[delete] 削除対象: ${targets.length}件 (${targets.map(t => t.name).join(", ")})`);
+      break;
     }
     
-    if (targets.length > 0) break;
-    console.log(`[delete] 対象が見つかりませんでした。リトライ ${retry + 1}/3`);
+    console.log(`[delete] 対象が見つかりませんでした。リトライ ${retryCount + 1}/${maxRetries}`);
     await closeAnyMenu(page);
     await page.waitForTimeout(1000);
+    retryCount++;
   }
 
   if (targets.length === 0) {
@@ -756,16 +776,15 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     return;
   }
 
-  console.log(`[delete] 削除対象: ${targets.length}件 (${targets.map(t => t.name).join(", ")})`);
-
   // 各対象を削除
   for (const target of targets) {
     console.log(`[delete] "${target.name}" を削除中...`);
 
+    // 削除前にメニューを開き直す
     await openWatchlistMenuHard(page, 6);
     await page.waitForTimeout(500);
 
-    // 対象の行を再度取得
+    // 対象の行を特定
     const row = page.locator(`[data-qa-id="menu-inner"] :has-text("${target.name}"), [role="menuitem"]:has-text("${target.name}")`).first();
     await row.waitFor({ state: "visible", timeout: 10000 });
 
@@ -773,7 +792,7 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     await row.hover();
     await page.waitForTimeout(500);
 
-    // 削除ボタン（ゴミ箱）を探す
+    // 削除ボタンを探す（複数のセレクタ）
     const deleteBtnSelectors = [
       'button[data-name="remove-button"]',
       'button[data-name="delete-button"]',
@@ -830,7 +849,22 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     await page.waitForTimeout(500);
   }
 
-  console.log(`[delete] "${prefix}" の削除完了`);
+  // 削除後、もう一度スキャンして残っていないことを確認
+  await openWatchlistMenuHard(page, 6);
+  await page.waitForTimeout(800);
+  const remaining = await page.locator('[data-qa-id="menu-inner"] [class*="item-"], [role="menuitem"]').evaluateAll(
+    (els, prefixes) => {
+      const texts = els.map(el => el.innerText?.trim() || "");
+      return texts.filter(t => prefixes.some(p => t.toLowerCase().startsWith(p.toLowerCase())));
+    },
+    prefixes
+  );
+  
+  if (remaining.length > 0) {
+    console.warn(`[delete] 削除後も残っているリストがあります: ${remaining.join(", ")}`);
+  } else {
+    console.log(`[delete] "${prefix}" の削除完了（残りなし）`);
+  }
 }
 
 /**
