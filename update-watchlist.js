@@ -281,6 +281,62 @@ async function waitForTradingViewReady(page) {
   await page.waitForTimeout(2000);
 }
 
+async function openWatchlistMenuHard(page, retry = 8) {
+  await ensureWatchlistPanelOpen(page);
+
+  for (let i = 0; i < retry; i++) {
+    await closeAnyMenu(page);
+    await page.waitForTimeout(300);
+
+    const btn = await getWatchlistMenuTrigger(page);
+    if (!btn) {
+      await page.waitForTimeout(600);
+      continue;
+    }
+
+    const ok = await clickBestEffort(btn, 8000);
+    if (!ok) continue;
+
+    await page.waitForTimeout(900);
+
+    const root = await getVisibleWatchlistMenuRoot(page);
+    if (root) {
+      console.log(`watchlist menu opened. retry=${i + 1}`);
+      return true;
+    }
+
+    console.log(`watchlist menu not actually opened. retry=${i + 1}`);
+    await page.waitForTimeout(600);
+  }
+
+  await safeScreenshot(page, "watchlist_menu_not_opened");
+  return false;
+}
+
+async function closeAnyMenu(page) {
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.waitForTimeout(200);
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.waitForTimeout(250);
+}
+
+async function getVisibleWatchlistMenuRoot(page) {
+  const re =
+    /リストに(高度な)?アラートを追加|リストを開く|リストをアップロード|Open list|Upload list|Add( advanced)? alert/i;
+
+  const roots = [
+    page.locator('[role="menu"]').filter({ hasText: re }),
+    page.locator('div[data-name="menu-inner"]').filter({ hasText: re }),
+    page.locator('div[class*="menu"]').filter({ hasText: re }),
+  ];
+
+  for (const root of roots) {
+    const el = await firstVisible(root, 10);
+    if (el) return el;
+  }
+  return null;
+}
+
 // ==============================
 // Menu item helpers
 // ==============================
