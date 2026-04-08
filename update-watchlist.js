@@ -718,52 +718,137 @@ async function assertWatchlistExists(page, listName) {
 async function deleteManagedWatchlistsByPrefix(page, prefix) {
   console.log(`[delete] "${prefix}" で始まるウォッチリストを削除します...`);
 
-  // メニューが開いていない場合は開く
-  await openWatchlistMenuHard(page);
+  // 削除対象のリスト名を収集
+  let targets = [];
+  for (let retry = 0; retry < 3; retry++) {
+    await openWatchlistMenuHard(page, 6);
+    await page.waitForTimeout(800);
 
-  // 提供いただいたHTML構造に基づき、メニュー内の全アイテムを取得
-  // data-qa-id="menu-inner" の中にあるリスト名をスキャン
-  const listItems = page.locator('[data-qa-id="menu-inner"] [class*="item-"]');
-  const count = await listItems.count();
-  let deletedAny = false;
-
-  const targets = [];
-  for (let i = 0; i < count; i++) {
-    const text = await listItems.nth(i).innerText();
-    if (text.trim().startsWith(prefix)) {
-      targets.push(text.trim());
+    // メニュー内の全リスト項目を取得（複数のセレクタでフォールバック）
+    const selectors = [
+      '[data-qa-id="menu-inner"] [class*="item-"]',
+      '[role="menuitem"][data-role="list-item"]',
+      'div[data-role="list-item"]',
+      '[data-qa-id="menu-inner"] > div'
+    ];
+    let listItems = null;
+    for (const sel of selectors) {
+      const items = page.locator(sel);
+      if ((await items.count()) > 0) {
+        listItems = items;
+        break;
+      }
     }
+    if (!listItems) {
+      console.log(`[delete] リスト項目が見つかりません。リトライ ${retry + 1}/3`);
+      await closeAnyMenu(page);
+      await page.waitForTimeout(1000);
+      continue;
+    }
+
+    const count = await listItems.count();
+    targets = [];
+    for (let i = 0; i < count; i++) {
+      const text = await listItems.nth(i).innerText().catch(() => "");
+      // プレフィックス一致（先頭一致、大文字小文字区別なし）
+      if (text.trim().toLowerCase().startsWith(prefix.toLowerCase())) {
+        targets.push({ element: listItems.nth(i), name: text.trim() });
+      }
+    }
+    
+    if (targets.length > 0) break;
+    console.log(`[delete] 対象が見つかりませんでした。リトライ ${retry + 1}/3`);
+    await closeAnyMenu(page);
+    await page.waitForTimeout(1000);
   }
 
-  console.log(`[delete] 削除対象: ${targets.length}件 (${targets.join(', ')})`);
-
-  for (const targetName of targets) {
-    console.log(`[delete] "${targetName}" を削除中...`);
-
-    // 再度メニューを開く（削除ごとにメニューが閉じる場合があるため）
-    await openWatchlistMenuHard(page);
-
-    // ターゲットの行を特定し、その中にある「×」ボタン（削除ボタン）をクリック
-    const row = page.locator(`[data-qa-id="menu-inner"] [class*="item-"]:has-text("${targetName}")`).first();
-    
-    // TradingViewの削除ボタンはホバーしないと出ない場合があるため、まずホバー
-    await row.hover();
-    
-    // 削除ボタン（通常は aria-label="削除" や data-name="delete-button" など）
-    const deleteBtn = row.locator('button[data-name="remove-button"], [data-name="delete-button"], [aria-label*="削除"], [aria-label*="Remove"]').first();
-    
-    await deleteBtn.click({ force: true });
-
-    // --- ここが今回のエラーの核心：確認ダイアログの処理 ---
-    await confirmTradingViewDialog(page);
-    
-    deletedAny = true;
-    await page.waitForTimeout(1000); // 処理安定のための待機
-  }
-
-  if (!deletedAny) {
+  if (targets.length === 0) {
     console.log(`[delete] "${prefix}" に一致するリストはありませんでした。`);
+    return;
   }
+
+  console.log(`[delete] 削除対象: ${targets.length}件 (${targets.map(t => t.name).join(", ")})`);
+
+  // 各対象を削除
+  for (const target of targets) {
+    console.log(`[delete] "${target.name}" を削除中...`);
+
+    // メニューを開く（各削除前に確実に開く）
+    await openWatchlistMenuHard(page, 6);
+    await page.waitForTimeout(500);
+
+    // 対象の行を再度取得（要素が古くなっている可能性があるため）
+    const row = page.locator(`[data-qa-id="menu-inner"] :has-text("${target.name}"), [role="menuitem"]:has-text("${target.name}")`).first();
+    await row.waitFor({ state: "visible", timeout: 10000 });
+
+    // 行にホバーして削除ボタンを表示させる（TradingView の仕様）
+    await row.hover();
+    await page.waitForTimeout(500);
+
+    // 削除ボタン（ゴミ箱マーク）を探す - 複数のセレクタ
+    const deleteBtnSelectors = [
+      'button[data-name="remove-button"]',
+      'button[data-name="delete-button"]',
+      'button[aria-label*="削除"]',
+      'button[aria-label*="Delete"]',
+      'button[aria-label*="Remove"]',
+      'button[class*="remove"]',
+      'button[class*="delete"]',
+      '[data-qa-id="remove-button"]',
+      'button svg[class*="trash"]',
+      'button:has(svg[class*="trash"])'
+    ];
+    
+    let deleteBtn = null;
+    for (const sel of deleteBtnSelectors) {
+      const btn = row.locator(sel).first();
+      if (await btn.isVisible().catch(() => false)) {
+        deleteBtn = btn;
+        break;
+      }
+    }
+    
+    // それでも見つからない場合、行全体からボタンらしいものを探す
+    if (!deleteBtn) {
+      const allButtons = row.locator('button');
+      const btnCount = await allButtons.count();
+      for (let i = 0; i < btnCount; i++) {
+        const btn = allButtons.nth(i);
+        const isVisible = await btn.isVisible().catch(() => false);
+        if (isVisible) {
+          deleteBtn = btn;
+          break;
+        }
+      }
+    }
+
+    if (!deleteBtn) {
+      // フォールバック: 右クリック → 削除メニュー
+      console.log(`[delete] 削除ボタンが見つからないため、右クリックメニューを使用します: ${target.name}`);
+      await row.click({ button: "right", force: true });
+      await page.waitForTimeout(500);
+      const delMenuItem = page.locator('[role="menuitem"]:has-text("削除"), [role="menuitem"]:has-text("Delete")').first();
+      if (await delMenuItem.isVisible().catch(() => false)) {
+        await delMenuItem.click({ force: true });
+      } else {
+        throw new Error(`削除ボタンも右クリックメニューも使えませんでした: ${target.name}`);
+      }
+    } else {
+      await deleteBtn.click({ force: true });
+    }
+
+    await page.waitForTimeout(500);
+    
+    // 確認ダイアログを処理
+    await confirmTradingViewDialog(page);
+    await page.waitForTimeout(1000);
+
+    // メニューを閉じる
+    await closeAnyMenu(page);
+    await page.waitForTimeout(500);
+  }
+
+  console.log(`[delete] "${prefix}" の削除完了`);
 }
 
 /**
@@ -772,33 +857,43 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
 async function confirmTradingViewDialog(page) {
   console.log("[dialog] 確認ダイアログを待機中...");
 
-  // 1. ダイアログ要素そのものを特定（この中にあるボタンしかクリックしない）
-  const dialog = page.locator('[role="dialog"], [class*="dialog-"], .tv-dialog').last();
-
-  try {
-    // 2. ダイアログが表示されるのを待つ
-    await dialog.waitFor({ state: 'visible', timeout: 5000 });
-
-    // 3. マグネットボタン（画面左側）との誤認を避けるため、
-    // ダイアログ内の「削除」「Yes」「OK」などのテキストを持つボタンを厳格に指定
-    const okButton = dialog.locator('button').filter({ 
-      hasText: /^(削除|はい|Yes|OK|Yes, delete)$/i 
-    }).first();
-
-    // 4. 背景の膜（backdrop）に邪魔されてもクリックできる文字通り「強制クリック」
-    await okButton.click({ force: true, timeout: 5000 });
-    console.log("[dialog] 削除を承認しました。");
-  } catch (e) {
-    // ダイアログが出なかった場合は、既に削除されているか、ボタン名が違う可能性がある
-    console.warn(`[dialog] 確認ボタンが見つかりません: ${e.message}`);
-    
-    // バックアップ手段: data-name="ok" を探す
-    const backupBtn = page.locator('[data-name="ok"], [data-name="yes"]').first();
-    if (await backupBtn.isVisible()) {
-      await backupBtn.click({ force: true });
-      console.log("[dialog] バックアップボタンで承認しました。");
+  // ダイアログを特定
+  const dialogSelectors = ['[role="dialog"]', '[class*="dialog-"]', '.tv-dialog', '[data-role="dialog"]'];
+  let dialog = null;
+  for (const sel of dialogSelectors) {
+    const d = page.locator(sel).last();
+    if (await d.isVisible().catch(() => false)) {
+      dialog = d;
+      break;
     }
   }
+  
+  if (!dialog) {
+    console.log("[dialog] 確認ダイアログが見つかりませんでした（既に閉じているか不要）");
+    return;
+  }
+
+  // 確認ボタン
+  const confirmBtn = dialog.locator('button').filter({ 
+    hasText: /^(削除|Delete|はい|Yes|OK|Yes, delete)$/i 
+  }).first();
+  
+  if (await confirmBtn.isVisible().catch(() => false)) {
+    await confirmBtn.click({ force: true });
+    console.log("[dialog] 削除を承認しました。");
+  } else {
+    // フォールバック
+    const backupBtn = dialog.locator('[data-name="ok"], [data-name="yes"], [data-name="confirm"]').first();
+    if (await backupBtn.isVisible().catch(() => false)) {
+      await backupBtn.click({ force: true });
+      console.log("[dialog] バックアップボタンで承認しました。");
+    } else {
+      console.warn("[dialog] 確認ボタンが見つかりません。Esc で閉じます。");
+      await page.keyboard.press("Escape");
+    }
+  }
+  
+  await page.waitForTimeout(500);
 }
 
 // ==============================
