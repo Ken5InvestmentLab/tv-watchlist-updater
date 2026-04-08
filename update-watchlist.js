@@ -1068,40 +1068,50 @@ async function deleteManagedAlerts(page, prefixes) {
   throw new Error("アラート削除ループが上限に達しました");
 }
 
-async function openWatchlistMenuHard(page, retry = 8) {
-  await ensureWatchlistPanelOpen(page);
+/**
+ * ウォッチリストのドロップダウンメニューを確実に開く関数
+ * テキストベースの判定、属性指定、強制クリックを組み合わせています。
+ */
+async function openWatchlistMenuHard(page, retryCount = 10) {
+    for (let i = 0; i < retryCount; i++) {
+        try {
+            console.log(`[menu] ウォッチリストメニューを開こうとしています... (試行 ${i + 1}/${retryCount})`);
 
-  for (let i = 0; i < retry; i++) {
-    await closeAnyMenu(page);
-    await page.waitForTimeout(300);
+            // 1. セレクタの定義
+            // data-name属性を優先しつつ、内部のタイトル表示スパンも考慮
+            const buttonSelector = 'button[data-name="watchlists-button"]';
+            const trigger = page.locator(buttonSelector).first();
 
-    const trigger = await getWatchlistMenuTrigger(page);
-    if (!trigger) {
-      console.log(`[menu] Watchlist menu trigger not found. retry=${i + 1}`);
-      await page.waitForTimeout(600);
-      continue;
+            // 要素が見えるまで少し待機
+            await trigger.waitFor({ state: 'visible', timeout: 5000 });
+
+            // 2. クリック実行（force: true で他要素による重なりを無視）
+            // 親のbutton要素全体をクリック対象にすることで、中のsvgやテキストどこに当たっても反応させます
+            await trigger.click({ force: true });
+            
+            // 3. メニューが開いたかどうかの判定
+            // TradingViewのメニューは通常 [data-name="menu-inner"] や role="menu" を持ちます
+            // ここでは少し待機してメニュー要素が出現したか確認
+            try {
+                await page.waitForSelector('[data-name="menu-inner"], [role="menu"], .menu-pS_296_R', { 
+                    state: 'visible', 
+                    timeout: 2000 
+                });
+                console.log('[menu] メニューが正常に開きました。');
+                return true; 
+            } catch (e) {
+                console.warn(`[menu] クリックしましたがメニューが確認できません。リトライします...`);
+                // メニューが開かなかった場合、一度適当な場所をクリックしてリセットを試みる（任意）
+            }
+
+        } catch (err) {
+            console.error(`[menu] 試行 ${i + 1} 中にエラーが発生しました: ${err.message}`);
+        }
+        
+        await page.waitForTimeout(1000); // 次の試行まで1秒待機
     }
-
-    // 追加: ホバーしてからクリック（不要と言われても保険）
-    await trigger.hover().catch(() => {});
-    await page.waitForTimeout(200);
-
-    const ok = await clickBestEffort(trigger, 8000);
-    if (!ok) continue;
-
-    // メニューが開くのを最大6秒待つ（従来より長め）
-    const menuRoot = await waitForMenuOpen(page, 6000);
-    if (menuRoot) {
-      console.log(`[menu] watchlist menu opened. retry=${i + 1}`);
-      return true;
-    }
-
-    console.log(`[menu] watchlist menu not actually opened. retry=${i + 1}`);
-    await page.waitForTimeout(600);
-  }
-
-  await safeScreenshot(page, "watchlist_menu_not_opened");
-  return false;
+    
+    throw new Error('ウォッチリストメニューを規定回数内に開けませんでした。');
 }
 
 // ==============================
