@@ -151,54 +151,115 @@ async function clickBestEffort(locator, timeout = 8000) {
 // Base UI: Watchlist panel / menu (UI変更に強い版)
 // ==============================
 
-// ウォッチリストボタンを取得（複数の候補から）
 async function getWatchlistButton(page) {
-  const candidates = [
-    'button[aria-label*="ウォッチリスト"]',
-    'button[aria-label*="Watchlist"]',
-    'button[data-tooltip*="ウォッチリスト"]',
-    'button[data-tooltip*="Watchlist"]',
-    'button[data-name="watchlists-button"]',  // 旧形式フォールバック
-    'button[data-name="base"][aria-label*="ウォッチリスト"]',
-  ];
-  
-  for (const sel of candidates) {
-    const btn = page.locator(sel).first();
-    if (await btn.isVisible().catch(() => false)) {
-      return btn;
-    }
+  // 1. ロール + テキスト（最も信頼できる）
+  const roleBtn = page.getByRole('button', { name: /ウォッチリスト|Watchlist/i }).first();
+  if (await roleBtn.isVisible().catch(() => false)) return roleBtn;
+
+  // 2. aria-label や title
+  const attrBtn = page.locator('button[aria-label*="ウォッチリスト"], button[aria-label*="Watchlist"], button[title*="ウォッチリスト"], button[title*="Watchlist"]').first();
+  if (await attrBtn.isVisible().catch(() => false)) return attrBtn;
+
+  // 3. data-tooltip
+  const tooltipBtn = page.locator('button[data-tooltip*="ウォッチリスト"], button[data-tooltip*="Watchlist"]').first();
+  if (await tooltipBtn.isVisible().catch(() => false)) return tooltipBtn;
+
+  // 4. 部分クラス名
+  const classBtn = page.locator('button[class*="watchlist"], button[class*="Watchlist"]').first();
+  if (await classBtn.isVisible().catch(() => false)) return classBtn;
+
+  // 5. 最終手段: SVG アイコンの親ボタン（TVはよくアイコンを使う）
+  const svgBtn = page.locator('svg').locator('xpath=ancestor::button').first();
+  if (await svgBtn.isVisible().catch(() => false)) return svgBtn;
+
+  return null;
+}
+
+async function waitForMenuOpen(page, timeout = 10000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const menu = await getVisibleWatchlistMenuRoot(page);
+    if (menu) return menu;
+    await page.waitForTimeout(300);
   }
   return null;
 }
 
-// ウォッチリストのメニューを開くボタン（3点リーダーなど）を取得
+async function findMenuItemByRole(page, nameRegex) {
+  // role="menuitem" かつテキストが一致
+  const item = page.getByRole('menuitem', { name: nameRegex }).first();
+  if (await item.isVisible().catch(() => false)) return item;
+
+  // フォールバック: 任意のロール + テキスト
+  const anyRole = page.locator('[role="menuitem"], [role="option"], [role="row"]').filter({ hasText: nameRegex }).first();
+  if (await anyRole.isVisible().catch(() => false)) return anyRole;
+
+  return null;
+}
+
+async function handleUnexpectedDialogs(page) {
+  // Change interval ダイアログ
+  if (await isChangeIntervalDialogOpen(page)) {
+    await fill4HInChangeIntervalDialog(page);
+    return true;
+  }
+  // ウォッチリストのプロモーション
+  if (await isWatchlistPromoDialogVisible(page)) {
+    await closeWatchlistPromoDialog(page);
+    return true;
+  }
+  // その他「OK」だけで閉じるエラーダイアログ
+  const errorOk = page.getByRole('button', { name: /OK|閉じる|Close/i }).first();
+  if (await errorOk.isVisible().catch(() => false)) {
+    await errorOk.click();
+    return true;
+  }
+  return false;
+}
+
+async function debugDump(page, label) {
+  const dump = {
+    label,
+    url: page.url(),
+    buttons: await page.locator('button').evaluateAll(btns => btns.slice(0, 20).map(b => ({
+      text: b.innerText?.slice(0, 50),
+      ariaLabel: b.getAttribute('aria-label'),
+      role: b.getAttribute('role'),
+      visible: b.offsetParent !== null
+    }))),
+    watchlistButton: await getWatchlistButton(page) ? 'exists' : 'missing'
+  };
+  fs.writeFileSync(path.join(WORKDIR, `debug_${label}.json`), JSON.stringify(dump, null, 2));
+}
+
 async function getWatchlistMenuTrigger(page) {
+  const watchlistBtn = await getWatchlistButton(page);
+  if (!watchlistBtn) return null;
+
+  // 優先順位の高い候補から順にチェック
   const candidates = [
-    'button[data-name="watchlist-menu-button"]',
-    'button[aria-label*="More" i]',
-    'button[aria-label*="その他"]',
-    'button[data-tooltip*="More" i]',
-    'button[data-tooltip*="その他"]',
-    'button[aria-haspopup="menu"][data-name*="menu"]',
-    'button[aria-label*="Watchlist menu"]',
-    'button[aria-label*="ウォッチリストメニュー"]',
+    // クラス名に arrow を含む要素
+    () => watchlistBtn.locator('[class*="arrow"]').first(),
+    // SVGアイコンの親要素（矢印アイコンの場合）
+    () => watchlistBtn.locator('svg').locator('xpath=..').first(),
+    // 下矢印テキスト（▼, ⌄, ↓）を含む要素
+    () => watchlistBtn.locator('text=/[▼⌄↓]|arrow/i').first(),
+    // ボタン内の最後の子要素（多くの場合、矢印が最後）
+    () => watchlistBtn.locator('> :last-child').first(),
+    // フォールバック: ボタン全体
+    () => watchlistBtn,
   ];
-  
-  for (const sel of candidates) {
-    const btn = page.locator(sel).first();
-    if (await btn.isVisible().catch(() => false)) {
-      return btn;
+
+  for (const factory of candidates) {
+    const el = factory();
+    if ((await el.count()) === 0) continue;
+    if (await el.isVisible().catch(() => false)) {
+      // クリック可能な先祖（buttonなど）を返す
+      const clickable = el.locator('xpath=ancestor-or-self::*[self::button or @role="button"]').first();
+      if (await clickable.isVisible().catch(() => false)) return clickable;
+      return el;
     }
   }
-  
-  // フォールバック: ウォッチリストパネル内の何らかのボタン
-  const panel = await getWatchlistButton(page);
-  if (panel) {
-    const parent = panel.locator('xpath=ancestor::*[contains(@class,"watchlist")]').first();
-    const menuBtn = parent.locator('button').filter({ hasText: /•••|...|▼|⌄/i }).first();
-    if (await menuBtn.isVisible().catch(() => false)) return menuBtn;
-  }
-  
   return null;
 }
 
@@ -280,6 +341,7 @@ async function openWatchlistPanel(page) {
 
 async function ensureWatchlistPanelOpen(page) {
   for (let attempt = 0; attempt < 3; attempt++) {
+    await handleUnexpectedDialogs(page);
     if (await isWatchlistPanelReady(page)) return;
     
     // 余計なメニューを閉じてからリトライ
@@ -338,6 +400,9 @@ async function openWatchlistMenuHard(page, retry = 8) {
 
     const btn = await getWatchlistMenuTrigger(page);
     if (!btn) {
+      // デバッグ出力はそのまま
+      console.log(`[menu] Watchlist menu trigger not found. retry=${i + 1}`);
+      // ... 既存のデバッグコード ...
       await page.waitForTimeout(600);
       continue;
     }
@@ -345,15 +410,14 @@ async function openWatchlistMenuHard(page, retry = 8) {
     const ok = await clickBestEffort(btn, 8000);
     if (!ok) continue;
 
-    await page.waitForTimeout(900);
-
-    const root = await getVisibleWatchlistMenuRoot(page);
-    if (root) {
-      console.log(`watchlist menu opened. retry=${i + 1}`);
+    // ★ ここを差し替え
+    const menuRoot = await waitForMenuOpen(page, 5000); // 最大5秒待つ
+    if (menuRoot) {
+      console.log(`[menu] watchlist menu opened. retry=${i + 1}`);
       return true;
     }
 
-    console.log(`watchlist menu not actually opened. retry=${i + 1}`);
+    console.log(`[menu] watchlist menu not actually opened. retry=${i + 1}`);
     await page.waitForTimeout(600);
   }
 
@@ -369,18 +433,29 @@ async function closeAnyMenu(page) {
 }
 
 async function getVisibleWatchlistMenuRoot(page) {
-  const re =
-    /リストに(高度な)?アラートを追加|リストを開く|リストをアップロード|Open list|Upload list|Add( advanced)? alert/i;
+  const menuKeywords = /リストに(高度な)?アラートを追加|リストを開く|リストをアップロード|Open list|Upload list|Add( advanced)? alert/i;
 
-  const roots = [
-    page.locator('[role="menu"]').filter({ hasText: re }),
-    page.locator('div[data-name="menu-inner"]').filter({ hasText: re }),
-    page.locator('div[class*="menu"]').filter({ hasText: re }),
+  const selectors = [
+    '[role="menu"]',
+    '[role="listbox"]',
+    'div[data-name="menu-inner"]',
+    'div[class*="menu"]',
+    'div[class*="dropdown"]',
+    'div[class*="popup"]',
   ];
 
-  for (const root of roots) {
-    const el = await firstVisible(root, 10);
-    if (el) return el;
+  for (const sel of selectors) {
+    const roots = page.locator(sel);
+    const count = await roots.count();
+    for (let i = 0; i < count; i++) {
+      const root = roots.nth(i);
+      if (!(await root.isVisible())) continue;
+      const text = await root.textContent();
+      if (menuKeywords.test(text)) return root;
+      // メニュー項目が2つ以上あるか
+      const itemCount = await root.locator('[role="menuitem"], [data-role="menuitem"]').count();
+      if (itemCount >= 2) return root;
+    }
   }
   return null;
 }
@@ -421,7 +496,12 @@ async function findMenuItemByText(page, re) {
 }
 
 async function clickMenuItemByText(page, re) {
-  const item = await findMenuItemByText(page, re);
+  // まず role ベースで探す
+  let item = await findMenuItemByRole(page, re);
+  if (!item) {
+    // 従来の findMenuItemByText をフォールバック
+    item = await findMenuItemByText(page, re);
+  }
   if (!item) {
     await safeScreenshot(page, "menu_item_not_found");
     throw new Error(`メニュー項目が見つかりませんでした: ${re}`);
@@ -469,6 +549,7 @@ async function closeOpenListDialogIfVisible(page) {
 async function switchWatchlistTo(page, listName) {
   console.log("Switching watchlist to:", listName);
 
+  await handleUnexpectedDialogs(page);
   await openListOpenDialog(page);
 
   const row = page.locator(`div[data-role="list-item"][data-title="${listName}"]`).first();
@@ -533,6 +614,7 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
   await openListOpenDialog(page);
 
   for (let round = 0; round < 80; round++) {
+    await handleUnexpectedDialogs(page);
     const rows = page.locator('div[data-role="list-item"][data-title]');
     const count = await rows.count().catch(() => 0);
 
@@ -1978,6 +2060,7 @@ async function createWatchlistAlertIfPossible(page, listName) {
     }
   } catch (err) {
     console.error(`[alert] failed for watchlist="${listName}":`, err?.message || err);
+    await debugDump(page, `error_${listName}`);
     await safeScreenshot(page, `failed_${listName}`);
     throw err;
   }
@@ -2108,7 +2191,10 @@ async function dumpAlertTickerTexts(page) {
     await browser.close();
   } catch (err) {
     console.error("FAILED:", err?.message || err);
-    if (page) await safeScreenshot(page, "failed");
+    if (page) {
+      await debugDump(page, "final_error");
+      await safeScreenshot(page, "failed");
+    }
     if (browser) await browser.close().catch(() => {});
     process.exit(1);
   }
