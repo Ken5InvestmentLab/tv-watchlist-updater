@@ -392,34 +392,34 @@ async function ensureWatchlistPanelOpen(page) {
 
 // ページ準備完了待機（複数セレクタで待つ）
 async function waitForTradingViewReady(page) {
-  const selectors = [
-    'button[aria-label*="ウォッチリスト"]',
-    'button[aria-label*="Watchlist"]',
-    '[data-name="chart"]',
-    'canvas',
+  // まずチャートが表示されるのを待つ
+  await page.waitForSelector('canvas', { timeout: 30000 }).catch(() => {});
+
+  // よくあるダイアログを閉じる
+  const commonCloseButtons = [
+    'button[aria-label="Close"]',
+    'button[aria-label="閉じる"]',
+    'button[data-qa-id="promo-dialog-close-button"]',
+    'button:has-text("OK")',
+    'button:has-text("同意する")',
+    'button:has-text("Accept")',
   ];
-  
-  let found = false;
-  for (const sel of selectors) {
-    if (await page.locator(sel).first().isVisible({ timeout: 5000 }).catch(() => false)) {
-      found = true;
-      break;
+  for (const sel of commonCloseButtons) {
+    const btn = page.locator(sel).first();
+    if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await btn.click().catch(() => {});
+      await page.waitForTimeout(500);
     }
   }
-  
-  if (!found) {
-    await safeScreenshot(page, "tradingview_not_ready");
-    throw new Error("TradingViewのUIが読み込まれませんでした");
-  }
-  
-  // ウォッチリストボタンが表示されるのを待つ
+
+  // ウォッチリストボタンが最終的に表示されるのを待つ
   const btn = await getWatchlistButton(page);
   if (!btn) {
-    await safeScreenshot(page, "watchlist_button_missing");
-    throw new Error("ウォッチリストボタンが見つかりません（タイムアウト）");
+    await safeScreenshot(page, 'watchlist_button_missing_after_wait');
+    throw new Error('ウォッチリストボタンが見つかりません（タイムアウト）');
   }
-  
-  await page.waitForTimeout(2000);
+  await btn.waitFor({ state: 'visible', timeout: 10000 });
+  console.log('TradingView UI ready and watchlist button visible.');
 }
 
 async function clickBestEffort(locator, timeout = 8000) {
@@ -1285,67 +1285,71 @@ async function deleteManagedAlerts(page, prefixes) {
  * テキストベースの判定、属性指定、強制クリックを組み合わせています。
  */
 async function openWatchlistMenuHard(page, retryCount = 8) {
-  const buttonSelector = 'button[data-name="watchlists-button"]';
-  // 提供いただいたHTMLから判明した「正解のメニューセレクタ」
   const menuSelector = '[data-qa-id="active-watchlist-menu"]';
   const menuInnerSelector = '[data-qa-id="menu-inner"]';
 
   for (let i = 0; i < retryCount; i++) {
-    try {
-      console.log(`[menu] ウォッチリストメニューを開こうとしています... (試行 ${i + 1}/${retryCount})`);
+    console.log(`[menu] ウォッチリストメニューを開こうとしています... (試行 ${i + 1}/${retryCount})`);
 
-      // 既にメニューが開いているかチェック（二重クリック防止）
-      if (await page.locator(menuSelector).isVisible()) {
-        console.log('[menu] メニューは既に開いています。');
-        return true;
-      }
-
-      const button = page.locator(buttonSelector).first();
-      await button.waitFor({ state: 'visible', timeout: 5000 });
-
-      // 1. 通常クリックを試行
-      // 手動でどこを押しても開くとのことなので、まずはボタン中央をクリック
-      await button.click({ delay: 50 });
-
-      // 2. メニューが出現したか「確定した属性」で判定
-      try {
-        await page.waitForSelector(menuSelector, { state: 'visible', timeout: 2500 });
-        // 中身（menu-inner）もしっかり描画されるまで待機
-        await page.waitForSelector(menuInnerSelector, { state: 'visible', timeout: 1000 });
-        
-        console.log('[menu] メニューの出現を確定しました。');
-        return true;
-      } catch (e) {
-        console.warn(`[menu] 通常クリックでメニューが確認できません。強制発火を試みます...`);
-        
-        // 3. バックアップ：座標指定クリック（右端の矢印付近を狙う）
-        const box = await button.boundingBox();
-        if (box) {
-          await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2);
-        }
-        
-        // 4. 最終手段：JavaScriptでの直接イベント発火
-        await button.evaluate(el => {
-          el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-          el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-          el.click();
-        });
-
-        // 判定
-        await page.waitForTimeout(1000);
-        if (await page.locator(menuSelector).isVisible()) {
-          console.log('[menu] 強制発火によりメニューが開きました。');
-          return true;
-        }
-      }
-
-    } catch (err) {
-      console.error(`[menu] 試行 ${i + 1} 中にエラー: ${err.message}`);
+    // 既に開いているかチェック
+    if (await page.locator(menuSelector).isVisible().catch(() => false)) {
+      console.log('[menu] メニューは既に開いています。');
+      return true;
     }
+
+    // 閉じるべきダイアログがあれば閉じる
+    await handleUnexpectedDialogs(page);
+
+    // ボタンを柔軟に取得
+    const button = await getWatchlistButton(page);
+    if (!button) {
+      console.warn('[menu] ウォッチリストボタンが見つかりません。リトライ前にスクリーンショットを保存します。');
+      await safeScreenshot(page, `watchlist_button_not_found_${i}`);
+      await page.waitForTimeout(2000);
+      continue;
+    }
+
+    // ボタンが可視になるまで待機（デフォルトのタイムアウトを長めに）
+    try {
+      await button.waitFor({ state: 'visible', timeout: 8000 });
+    } catch (e) {
+      console.warn('[menu] ボタンが可視になりませんでした。リトライします。');
+      continue;
+    }
+
+    // クリック（force は使わない。ただし、スクロールしてから）
+    await button.scrollIntoViewIfNeeded().catch(() => {});
+    await button.click({ delay: 50 });
+
+    // メニュー出現待ち
+    try {
+      await page.waitForSelector(menuSelector, { state: 'visible', timeout: 3000 });
+      await page.waitForSelector(menuInnerSelector, { state: 'visible', timeout: 2000 });
+      console.log('[menu] メニューの出現を確定しました。');
+      return true;
+    } catch (e) {
+      console.warn('[menu] 通常クリックでメニューが確認できません。強制発火を試みます...');
+      // フォールバック: 座標クリック
+      const box = await button.boundingBox();
+      if (box) {
+        await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2);
+      }
+      // JavaScript イベント発火
+      await button.evaluate(el => el.click());
+      await page.waitForTimeout(1000);
+      if (await page.locator(menuSelector).isVisible().catch(() => false)) {
+        console.log('[menu] 強制発火によりメニューが開きました。');
+        return true;
+      }
+    }
+
     await page.waitForTimeout(1000);
   }
-  throw new Error('ウォッチリストメニューを規定回数内に開けませんでした。判定用セレクタが正しいか再確認が必要です。');
+
+  await safeScreenshot(page, 'watchlist_menu_open_failed');
+  throw new Error('ウォッチリストメニューを規定回数内に開けませんでした。');
 }
+
 // ==============================
 // Watchlist alert promo dialog
 // ==============================
