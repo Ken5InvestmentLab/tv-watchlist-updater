@@ -856,15 +856,26 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
 async function confirmTradingViewDialog(page) {
   console.log("[dialog] 確認ダイアログを待機中...");
 
-  // ダイアログを特定
-  const dialogSelectors = ['[role="dialog"]', '[class*="dialog-"]', '.tv-dialog', '[data-role="dialog"]'];
+  // 最大 5 秒間、ダイアログの出現を待つ
   let dialog = null;
-  for (const sel of dialogSelectors) {
-    const d = page.locator(sel).last();
-    if (await d.isVisible().catch(() => false)) {
-      dialog = d;
-      break;
+  for (let i = 0; i < 10; i++) {
+    const candidates = [
+      page.locator('[role="dialog"]:has-text("Delete this watchlist")'),
+      page.locator('[role="dialog"]:has-text("ウォッチリストを削除")'),
+      page.locator('[role="dialog"]:has-text("permanently delete")'),
+      page.locator('[data-qa-id="yes-btn"]').locator('xpath=ancestor::*[@role="dialog"][1]'),
+      page.locator('button[data-qa-id="yes-btn"]').locator('xpath=ancestor::div[contains(@class,"dialog")][1]'),
+    ];
+
+    for (const sel of candidates) {
+      const d = sel.first();
+      if (await d.isVisible().catch(() => false)) {
+        dialog = d;
+        break;
+      }
     }
+    if (dialog) break;
+    await page.waitForTimeout(500);
   }
 
   if (!dialog) {
@@ -872,27 +883,44 @@ async function confirmTradingViewDialog(page) {
     return;
   }
 
-  // 確認ボタン
-  const confirmBtn = dialog.locator('button').filter({
-    hasText: /^(削除|Delete|はい|Yes|OK|Yes, delete)$/i
-  }).first();
+  // 確認ボタンを探す (優先順位付き)
+  const confirmSelectors = [
+    dialog.locator('button[data-qa-id="yes-btn"]'),
+    dialog.locator('button:has-text("Delete")'),
+    dialog.locator('button:has-text("削除")'),
+    dialog.locator('button:has-text("Yes")'),
+    dialog.locator('button[data-name="yes"]'),
+    dialog.locator('button.red-D4RPB3ZC'), // クラス名の一部を指定
+  ];
 
-  if (await confirmBtn.isVisible().catch(() => false)) {
-    await confirmBtn.click({ force: true });
-    console.log("[dialog] 削除を承認しました。");
-  } else {
-    // フォールバック
-    const backupBtn = dialog.locator('[data-name="ok"], [data-name="yes"], [data-name="confirm"]').first();
-    if (await backupBtn.isVisible().catch(() => false)) {
-      await backupBtn.click({ force: true });
-      console.log("[dialog] バックアップボタンで承認しました。");
-    } else {
-      console.warn("[dialog] 確認ボタンが見つかりません。Esc で閉じます。");
-      await page.keyboard.press("Escape");
+  let clicked = false;
+  for (const btnLocator of confirmSelectors) {
+    const btn = btnLocator.first();
+    if (await btn.isVisible().catch(() => false)) {
+      await btn.click({ force: true });
+      console.log("[dialog] 削除を承認しました。");
+      clicked = true;
+      break;
     }
   }
 
-  await page.waitForTimeout(500);
+  if (!clicked) {
+    // デバッグ用にダイアログ内のボタンを出力
+    const allButtons = await dialog.locator('button').all();
+    const buttonTexts = await Promise.all(allButtons.map(async (b) => {
+      return {
+        text: await b.textContent().catch(() => ''),
+        dataQa: await b.getAttribute('data-qa-id').catch(() => ''),
+        className: await b.getAttribute('class').catch(() => ''),
+      };
+    }));
+    console.log("[dialog] ボタン一覧:", JSON.stringify(buttonTexts, null, 2));
+    console.warn("[dialog] 確認ボタンが見つかりません。Esc で閉じます。");
+    await page.keyboard.press("Escape");
+  }
+
+  // ダイアログが消えるのを少し待つ
+  await page.waitForTimeout(1000);
 }
 
 // ==============================
