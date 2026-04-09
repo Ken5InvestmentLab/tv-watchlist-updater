@@ -1352,6 +1352,7 @@ async function deleteManagedAlerts(page, prefixes) {
     if (deleted) {
       console.log("✅ 削除ボタンを直接クリックしました");
       await page.waitForTimeout(1500);
+      await confirmTradingViewDialog(page).catch(() => {});
     } else {
       console.log("⚠️ 削除ボタンが見つからないため、右クリックメニューを強制表示します");
 
@@ -1361,24 +1362,55 @@ async function deleteManagedAlerts(page, prefixes) {
         await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: 'right' });
         await page.waitForTimeout(800);
 
-        // メニュー内の削除項目を探す（page.evaluate で直接クリック）
-        const menuDeleted = await page.evaluate(() => {
-          const menu = document.querySelector('[data-role="menu"], [role="menu"]');
-          if (!menu) return false;
-          const items = Array.from(menu.querySelectorAll('[data-role="menuitem"], [role="menuitem"]'));
-          const deleteItem = items.find(el => /削除|Delete/i.test(el.textContent || ''));
-          if (deleteItem && typeof deleteItem.click === 'function') {
-            deleteItem.click();
-            return true;
+        // メニュー内の削除項目を探す（より柔軟に）
+        const delMenuItem = page.locator([
+          '[role="menuitem"]:has-text("削除")',
+          '[role="menuitem"]:has-text("Delete")',
+          '[role="menuitem"]:has-text("Remove")',
+          '[data-role="menuitem"]:has-text("削除")',
+          '[data-role="menuitem"]:has-text("Delete")',
+          '[data-role="menuitem"]:has-text("Remove")',
+          'div[class*="item"]:has-text("削除")',
+          'div[class*="item"]:has-text("Delete")',
+          'div[class*="item"]:has-text("Remove")'
+        ].join(', ')).first();
+
+        let menuDeleted = false;
+
+        if (await delMenuItem.isVisible().catch(() => false)) {
+          await delMenuItem.click({ force: true });
+          menuDeleted = true;
+          console.log("✅ 右クリックメニューから削除しました (Playwright)");
+        } else {
+          menuDeleted = await page.evaluate(() => {
+            const menu = document.querySelector('[data-role="menu"], [role="menu"]');
+            const items = menu 
+              ? Array.from(menu.querySelectorAll('[data-role="menuitem"], [role="menuitem"]'))
+              : Array.from(document.querySelectorAll('[role="menuitem"], [data-role="menuitem"], div[class*="menu"] div[class*="item"]'));
+            
+            const deleteItem = items.find(el => /削除|Delete|Remove/i.test(el.textContent || ''));
+            if (deleteItem && typeof deleteItem.click === 'function') {
+              deleteItem.click();
+              return true;
+            }
+            return false;
+          });
+
+          if (menuDeleted) {
+            console.log("✅ 右クリックメニューから削除しました (DOM Evaluate)");
           }
-          return false;
-        });
+        }
 
         if (menuDeleted) {
-          console.log("✅ 右クリックメニューから削除しました");
           await page.waitForTimeout(1500);
+          await confirmTradingViewDialog(page).catch(() => {});
         } else {
-          console.log("❌ 右クリックメニューにも削除項目なし");
+          console.log("❌ 右クリックメニューにも削除項目なし。Deleteキーを試行します。");
+          await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2); // 左クリックで選択
+          await page.waitForTimeout(300);
+          await page.keyboard.press('Delete').catch(() => {});
+          await page.waitForTimeout(1500);
+          await confirmTradingViewDialog(page).catch(() => {});
         }
       }
     }
