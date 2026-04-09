@@ -1225,16 +1225,16 @@ async function deleteManagedAlerts(page, prefixes) {
     let targetText = "";
 
     for (const row of rows) {
-      const txt = await getAlertTickerFromRow(row);
-      if (!txt) continue;
+  const txt = await getAlertTickerFromRow(row);
+  if (!txt) continue;
 
-      const matched = prefixes.some((p) => txt.startsWith(`${p}_`) || txt.startsWith(`${p},`) || txt === p);
-      if (matched) {
-        targetRow = row;
-        targetText = txt;
-        break;
-      }
-    }
+  const matched = prefixes.some((p) => txt.startsWith(`${p}_`) || txt.startsWith(`${p},`) || txt === p);
+  if (matched) {
+    targetRow = row;
+    targetText = txt;
+    break;
+  }
+}
 
     if (!targetRow) {
       console.log("No more managed alerts.");
