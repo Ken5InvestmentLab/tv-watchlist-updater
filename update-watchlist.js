@@ -1311,13 +1311,25 @@ async function deleteManagedAlerts(page, prefixes) {
     await page.waitForTimeout(400);
 
     let deletedByTrash = false;
-    const trashBtn = await findVisibleDeleteButtonWithin(actionRow, page);
-    if (trashBtn) {
-      const clicked = await clickBestEffort(trashBtn, 8000);
-      if (clicked) {
-        deletedByTrash = true;
-      }
+const trashBtn = await findVisibleDeleteButtonWithin(actionRow, page);
+if (trashBtn) {
+  const clicked = await clickBestEffort(trashBtn, 8000);
+
+  if (clicked) {
+    // ★ ここ追加（削除確認）
+    await page.waitForTimeout(800);
+
+    const stillExists = await actionRow.isVisible().catch(() => false);
+
+    if (stillExists) {
+      console.log("❌ 削除失敗（まだ残ってる）:", targetText);
+      deletedByTrash = false; // ← 重要（失敗扱いに戻す）
+    } else {
+      console.log("✅ 削除成功:", targetText);
+      deletedByTrash = true;
     }
+  }
+}
 
     if (!deletedByTrash) {
       const box = await actionRow.boundingBox().catch(() => null);
