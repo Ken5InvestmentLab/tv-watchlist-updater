@@ -1351,12 +1351,10 @@ async function deleteManagedAlerts(page, prefixes) {
         throw new Error(`アラート削除メニューが見つかりませんでした: ${targetText}`);
     }
 
+    // 確認ダイアログが出る場合はクリック（出ない場合はスキップ）
     const confirm = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
-    const confirmOk = await safeClick(confirm, { timeout: 8000, force: true });
-
-    if (!confirmOk) {
-      await safeScreenshot(page, `alert_delete_confirm_not_found_${Date.now()}`);
-      throw new Error(`アラート削除確認ボタンが押せませんでした: ${targetText}`);
+    if (await confirm.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await safeClick(confirm, { timeout: 5000, force: true });
     }
 
     let deleted = false;
