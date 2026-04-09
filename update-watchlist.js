@@ -143,7 +143,7 @@ async function findVisibleDeleteButtonWithin(scope) {
     'button[class*="delete"]',
     'button:has([data-name*="trash"])',
     'button:has([class*="trash"])',
-    'button:has(svg)',
+ main
   ];
 
   for (const sel of deleteBtnSelectors) {
@@ -151,13 +151,7 @@ async function findVisibleDeleteButtonWithin(scope) {
     if (await btn.isVisible().catch(() => false)) return btn;
   }
 
-  const iconButtons = scope.locator('button, [role="button"]');
-  const count = Math.min(await iconButtons.count().catch(() => 0), 12);
-  for (let i = 0; i < count; i++) {
-    const btn = iconButtons.nth(i);
-    if (await btn.isVisible().catch(() => false)) return btn;
-  }
-
+ main
   return null;
 }
 
@@ -798,15 +792,13 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
 
     // 対象の行を再度取得
     const row = page.locator(
-  `[data-qa-id="menu-inner"] :is([class*="item-"], [role="menuitem"], [data-role="list-item"], div):has-text("${target.name}")`
-).first();
-await row.waitFor({ state: "visible", timeout: 10000 });
+ main
 
 // ホバーして削除ボタンを表示
 await row.hover();
 await page.waitForTimeout(500);
 
-let deleteBtn = await findVisibleDeleteButtonWithin(row);
+ main
 
 if (!deleteBtn) {
   console.log(`[delete] 削除ボタンが見つからないため、右クリックメニューを使用: ${target.name}`);
@@ -977,6 +969,12 @@ async function describeLocator(locator) {
 
 async function findAlertsPanelToggle(page) {
   const attrSelector = [
+    'button[data-name="alerts"]',
+    'button[data-name="alerts-button"]',
+    'button[data-name="alerts-widget-button"]',
+    'button[data-qa-id="alerts-button"]',
+    '[role="button"][data-name="alerts"]',
+
     'button[aria-label*="Alerts" i]',
     'button[aria-label*="アラート"]',
     '[role="button"][aria-label*="Alerts" i]',
@@ -1017,14 +1015,32 @@ async function findAlertsPanelToggle(page) {
   return null;
 }
 
+async function closeCreateAlertDialogIfVisible(page) {
+  const title = page.getByText(/Create alert on|アラートを作成/i).first();
+  const visible = await title.isVisible().catch(() => false);
+  if (!visible) return false;
+
+  const closeBtn = page.locator('[role="dialog"] button[aria-label="Close"], [role="dialog"] button[aria-label="閉じる"]').first();
+  if (await closeBtn.isVisible().catch(() => false)) {
+    await clickBestEffort(closeBtn, 4000);
+    await page.waitForTimeout(600);
+    return true;
+  }
+
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.waitForTimeout(600);
+  return true;
+}
+
 async function isAlertsContentReady(page) {
   const markers = [
     page.locator('[data-name="alert-item-ticker"]').first(),
     page.locator('[data-name="alerts-manager"]').first(),
     page.locator('[data-name="alerts-list"]').first(),
     page.locator('[data-qa-id="alerts-list"]').first(),
-    page.locator('[data-name*="alert" i]').first(),
-    page.locator('[data-qa-id*="alert" i]').first(),
+    page.locator('[data-name="alerts-log"], [data-name="alerts-log-pane"]').first(),
+    page.locator('[data-name="alerts-list-wrapper"], [data-qa-id="alerts-list-wrapper"]').first(),
+    page.locator('[data-name="alert-item"], [data-role="alert-item"], [data-qa-id*="alert-item"]').first(),
     page
       .getByText(
         /No alerts|No alerts created|アラートがありません|アラートはありません|アラートなし/i
@@ -1055,6 +1071,7 @@ async function isAlertsSidebarOpen(page) {
 async function openAlertsPanel(page) {
   for (let attempt = 0; attempt < 6; attempt++) {
     await closeAnyMenu(page);
+    await closeCreateAlertDialogIfVisible(page);
 
     const toggle = await findAlertsPanelToggle(page);
     if (toggle) {
@@ -1066,6 +1083,7 @@ async function openAlertsPanel(page) {
       const clicked = await clickBestEffort(toggle, 8000);
       if (clicked) {
         await page.waitForTimeout(1500);
+        await closeCreateAlertDialogIfVisible(page);
         if (await isAlertsSidebarOpen(page)) {
           return;
         }
@@ -1263,6 +1281,7 @@ async function deleteManagedAlerts(page, prefixes) {
     }
 
     if (!deletedByTrash) {
+main
       await targetRow.click({ button: "right", force: true, timeout: 8000 }).catch(() => {});
       await page.waitForTimeout(500);
 
