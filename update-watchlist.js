@@ -2,9 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright");
 
-// ==============================
-// ENV
-// ==============================
+// ==============================\n// ENV\n// ==============================
 const TRADINGVIEW_STORAGE_STATE = process.env.TRADINGVIEW_STORAGE_STATE;
 
 const WATCHLIST_1_URL = process.env.WATCHLIST_1_URL;
@@ -34,9 +32,7 @@ const WORKDIR = path.resolve(process.cwd(), "tmp");
 const OUT1 = path.join(WORKDIR, "wl1.txt");
 const OUT2 = path.join(WORKDIR, "wl2.txt");
 
-// ==============================
-// Timestamp / Names (JST)
-// ==============================
+// ==============================\n// Timestamp / Names (JST)\n// ==============================
 function getTimestampJst() {
   const now = new Date();
   const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
@@ -51,9 +47,7 @@ const RUN_TS = getTimestampJst();
 const WATCHLIST_1_FINAL_NAME = `${WATCHLIST_1_PREFIX}_${RUN_TS}`;
 const WATCHLIST_2_FINAL_NAME = `${WATCHLIST_2_PREFIX}_${RUN_TS}`;
 
-// ==============================
-// Utils
-// ==============================
+// ==============================\n// Utils\n// ==============================
 function reqEnv(name, val) {
   if (!val) throw new Error(`Missing env: ${name}`);
 }
@@ -113,7 +107,7 @@ async function safeClick(locator, options = {}) {
 }
 
 function escapeRegex(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return s.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&");
 }
 
 function isManagedListName(name, prefix) {
@@ -130,39 +124,36 @@ async function firstVisible(locator, max = 30) {
   return null;
 }
 
-async function findVisibleDeleteButtonWithin(scope, page = null) {
+async function findVisibleDeleteButtonWithin(scope) {
+  // Enhanced selectors based on user feedback and common patterns
   const deleteBtnSelectors = [
     'button[data-name="remove-button"]',
     'button[data-name="delete-button"]',
-    'button[data-qa-id="remove-button"]',
-    '[data-qa-id="remove-button"]',
-    'button[aria-label*="削除"]',
+    'button[aria-label*="削除"]', // "削除" (Delete)
     'button[aria-label*="Delete"]',
     'button[aria-label*="Remove"]',
+    'button:has-text("削除")', // Text content is "削除"
+    'button:has-text("Delete")',
     'button[class*="remove"]',
     'button[class*="delete"]',
-    'button:has([data-name*="trash"])',
+    'button:has([data-name*="trash"])', // Contains a trash icon
     'button:has([class*="trash"])',
+    '[data-name="delete"]', // Another common attribute
   ];
 
   for (const sel of deleteBtnSelectors) {
     const btn = scope.locator(sel).first();
-    if (await btn.isVisible().catch(() => false)) return btn;
-  }
-
-  if (page) {
-    for (const sel of deleteBtnSelectors) {
-      const btn = page.locator(sel).first();
-      if (await btn.isVisible().catch(() => false)) return btn;
+    // Check if the button exists and is visible
+    if (await btn.isVisible({ timeout: 100 }).catch(() => false)) {
+      console.log(`[delete] Found delete button with selector: ${sel}`);
+      return btn;
     }
   }
-
-  return null;
+  console.warn('[delete] Could not find a visible delete button within the scope.');
+  return null; // No button found
 }
 
-// ==============================
-// Base UI: Watchlist panel / menu (UI変更に強い版)
-// ==============================
+// ==============================\n// Base UI: Watchlist panel / menu (UI変更に強い版)\n// ==============================
 
 async function getWatchlistButton(page) {
   // 1. data-name 属性（最も信頼できる）
@@ -264,7 +255,7 @@ async function getWatchlistMenuTrigger(page) {
   if (currentName) {
     const nameElement = watchlistBtn.locator(`text=${currentName}`).first();
     if (await nameElement.isVisible().catch(() => false)) {
-      console.log(`[trigger] using watchlist name text: "${currentName}"`);
+      console.log(`[trigger] using watchlist name text: \"${currentName}\"`);
       return nameElement;
     }
   }
@@ -308,7 +299,7 @@ async function getCurrentWatchlistTitle(page) {
   // aria-label から抽出
   const ariaLabel = await btn.getAttribute('aria-label');
   if (ariaLabel) {
-    const match = ariaLabel.match(/(w[al]?[12]?_\d{8}_\d{4})/);
+    const match = ariaLabel.match(/(w[al]?[12]?_\\d{8}_\\d{4})/);
     if (match) return match[1];
   }
 
@@ -324,7 +315,7 @@ async function getCurrentWatchlistTitle(page) {
     if (await el.isVisible().catch(() => false)) {
       const text = await el.textContent();
       if (text && text.trim()) {
-        const match = text.trim().match(/(w[al]?[12]?_\d{8}_\d{4})/);
+        const match = text.trim().match(/(w[al]?[12]?_\\d{8}_\\d{4})/);
         if (match) return match[1];
         return text.trim();
       }
@@ -333,11 +324,11 @@ async function getCurrentWatchlistTitle(page) {
 
   // ボタン全体のテキストから抽出
   const fullText = await btn.evaluate(el => el.innerText || el.textContent || "");
-  const match = fullText.match(/(w[al]?[12]?_\d{8}_\d{4})/);
+  const match = fullText.match(/(w[al]?[12]?_\\d{8}_\\d{4})/);
   if (match) return match[1];
 
   // 従来のトークン分割（フォールバック）
-  const tokens = fullText.split(/\s+/).filter(t => t && !t.match(/[▼⌄↓▶›»]/));
+  const tokens = fullText.split(/\\s+/).filter(t => t && !t.match(/[▼⌄↓▶›»]/));
   return tokens[0] || "";
 }
 
@@ -511,9 +502,7 @@ async function getVisibleWatchlistMenuRoot(page) {
   return null;
 }
 
-// ==============================
-// Menu item helpers
-// ==============================
+// ==============================\n// Menu item helpers\n// ==============================
 async function findMenuItemByText(page, re) {
   const root =
     (await getVisibleWatchlistMenuRoot(page)) ||
@@ -567,9 +556,7 @@ async function clickMenuItemByText(page, re) {
   await page.waitForTimeout(900);
 }
 
-// ==============================
-// Open list dialog / switch list
-// ==============================
+// ==============================\n// Open list dialog / switch list\n// ==============================
 async function openListOpenDialog(page) {
   // 新しいUI: メニュー内に直接リスト一覧が表示されている場合は何もしない
   const directListItems = page.locator('[data-qa-id="menu-inner"] [class*="item-"], [role="menuitem"][data-role="list-item"], div[data-role="list-item"]');
@@ -640,7 +627,7 @@ async function getWatchlistNameElement(page, listName) {
     }
   }
   // 見つからなければ、テキストを含む任意の要素を返す（フォールバック）
-  return btn.locator(`:has-text("${listName}")`).first();
+  return btn.locator(`:has-text(\"${listName}\")`).first();
 }
 
 async function switchWatchlistTo(page, listName) {
@@ -677,7 +664,7 @@ async function switchWatchlistTo(page, listName) {
   
   if (!row) {
     await safeScreenshot(page, `watchlist_not_found_in_list_${listName}`);
-    throw new Error(`リスト一覧に "${listName}" が見つかりません`);
+    throw new Error(`リスト一覧に \"${listName}\" が見つかりません`);
   }
 
   await row.click({ force: true, timeout: 8000 });
@@ -728,13 +715,11 @@ async function assertWatchlistExists(page, listName) {
   }
 }
 
-// ==============================
-// Delete watchlists
-// ==============================
+// ==============================\n// Delete watchlists\n// ==============================
 async function deleteManagedWatchlistsByPrefix(page, prefix) {
   // プレフィックスのバリエーション（例: "wl1" → ["wl1", "w1"]）
   const prefixes = [prefix, prefix.replace('l', '')];
-  console.log(`[delete] "${prefix}" で始まるウォッチリストを削除します（バリエーション: ${prefixes.join(', ')}）...`);
+  console.log(`[delete] \"${prefix}\" で始まるウォッチリストを削除します（バリエーション: ${prefixes.join(', ')}）...`);
 
   // 削除対象のリスト名を収集
   let targets = [];
@@ -782,7 +767,7 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
   }
 
   if (targets.length === 0) {
-    console.log(`[delete] "${prefix}" に一致するリストはありませんでした。`);
+    console.log(`[delete] \"${prefix}\" に一致するリストはありませんでした。`);
     return;
   }
 
@@ -790,7 +775,7 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
 
   // 各対象を削除
   for (const target of targets) {
-    console.log(`[delete] "${target.name}" を削除中...`);
+    console.log(`[delete] \"${target.name}\" を削除中...`);
 
     await openWatchlistMenuHard(page, 6);
     await page.waitForTimeout(500);
@@ -805,14 +790,14 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     await row.hover();
     await page.waitForTimeout(500);
 
-    let deleteBtn = await findVisibleDeleteButtonWithin(row, page);
+    let deleteBtn = await findVisibleDeleteButtonWithin(row);
     if (!deleteBtn) {
       const box = await row.boundingBox().catch(() => null);
       if (box) {
         // 右端に出るホバーゴミ箱を直接クリック（UI変更対策）
         await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2).catch(() => {});
         await page.waitForTimeout(400);
-        deleteBtn = await findVisibleDeleteButtonWithin(row, page);
+        deleteBtn = await findVisibleDeleteButtonWithin(row);
       }
     }
 
@@ -837,54 +822,53 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     await page.waitForTimeout(500);
   }
 
-  console.log(`[delete] "${prefix}" の削除完了`);
+  console.log(`[delete] \"${prefix}\" の削除完了`);
 }
 
-async function confirmTradingViewDialog(page) {
-  console.log("[dialog] 確認ダイアログを待機中...");
+async function confirmTradingViewDialog(page, isOptional = false) {
+  console.log(`[dialog] Checking for confirmation dialog (Optional: ${isOptional})...`);
 
-  // ダイアログを特定
-  const dialogSelectors = ['[role="dialog"]', '[class*="dialog-"]', '.tv-dialog', '[data-role="dialog"]'];
+  const dialogSelectors = ['[role="dialog"]', '[data-role="dialog"]', '.tv-dialog', '[data-name*="dialog"]'];
   let dialog = null;
   for (const sel of dialogSelectors) {
     const d = page.locator(sel).last();
-    if (await d.isVisible().catch(() => false)) {
-      dialog = d;
-      break;
+    if (await d.isVisible({timeout: 200}).catch(() => false)) {
+      const text = await d.textContent().catch(() => '');
+      // Make sure it's a confirmation dialog, not something else
+      if (text.match(/削除|Delete|はい|Yes|OK|Confirm|Are you sure/i)) {
+         dialog = d;
+         break;
+      }
     }
   }
-  
+
   if (!dialog) {
-    console.log("[dialog] 確認ダイアログが見つかりませんでした（既に閉じているか不要）");
+    if (isOptional) {
+      console.log("[dialog] No dialog found, which is acceptable.");
+      return; // It was optional, so we just continue
+    }
+    // If not optional, it's not an error, it just means it might have closed instantly.
+    // The main logic should verify the outcome, not the dialog itself.
+    console.log("[dialog] No confirmation dialog found.");
     return;
   }
 
-  // 確認ボタン
-  const confirmBtn = dialog.locator('button').filter({ 
-    hasText: /^(削除|Delete|はい|Yes|OK|Yes, delete)$/i 
+  console.log("[dialog] Confirmation dialog detected.");
+  const confirmBtn = dialog.locator('button').filter({
+    hasText: /^(削除|Delete|はい|Yes|OK|Confirm|Yes, delete)$/i
   }).first();
-  
+
   if (await confirmBtn.isVisible().catch(() => false)) {
     await confirmBtn.click({ force: true });
-    console.log("[dialog] 削除を承認しました。");
+    console.log("[dialog] Clicked confirmation button.");
+    await dialog.waitFor({ state: "hidden", timeout: 5000 }).catch(() => console.log("[dialog] Dialog did not disappear after click, but continuing."));
   } else {
-    // フォールバック
-    const backupBtn = dialog.locator('[data-name="ok"], [data-name="yes"], [data-name="confirm"]').first();
-    if (await backupBtn.isVisible().catch(() => false)) {
-      await backupBtn.click({ force: true });
-      console.log("[dialog] バックアップボタンで承認しました。");
-    } else {
-      console.warn("[dialog] 確認ボタンが見つかりません。Esc で閉じます。");
-      await page.keyboard.press("Escape");
-    }
+     console.warn("[dialog] Dialog was visible, but a confirmation button was not found. Attempting to press Escape.");
+     await page.keyboard.press("Escape").catch(()=>{});
   }
-  
-  await page.waitForTimeout(500);
 }
 
-// ==============================
-// Import watchlist
-// ==============================
+// ==============================\n// Import watchlist\n// ==============================
 function makeUploadCopyWithDesiredName(srcPath, desiredName) {
   ensureDir(WORKDIR);
   const dstPath = path.join(WORKDIR, `${desiredName}.txt`);
@@ -938,9 +922,7 @@ async function importWatchlistFromFile(page, filePath, desiredName) {
   await safeScreenshot(page, `after_upload_${desiredName}`);
 }
 
-// ==============================
-// Alerts
-// ==============================
+// ==============================\n// Alerts\n// ==============================
 async function firstVisibleClickable(locator, max = 40) {
   const count = Math.min(await locator.count().catch(() => 0), max);
 
@@ -965,7 +947,7 @@ async function describeLocator(locator) {
   try {
     return await locator.evaluate((el) => ({
       tag: el.tagName,
-      text: (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120),
+      text: (el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 120),
       ariaLabel: el.getAttribute("aria-label"),
       dataName: el.getAttribute("data-name"),
       dataTooltip: el.getAttribute("data-tooltip"),
@@ -1222,11 +1204,6 @@ async function getVisibleAlertRows(page) {
     if (!count) continue;
 
     const visible = [];
-    for (let i = 0; i < count; i++) {
-      const row = rows.nth(i);
-      if (await row.isVisible().catch(() => false)) visible.push(row);
-    }
-    if (visible.length > 0) return visible;
   }
 
   const tickerItems = page.locator('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]');
@@ -1280,6 +1257,7 @@ async function assertNoManagedAlertsRemain(page, prefixes) {
 
 async function deleteManagedAlerts(page, prefixes) {
   await ensureAlertsPanelOpen(page);
+  console.log("Starting to delete managed alerts. Prefixes:", prefixes);
 
   for (let round = 0; round < 200; round++) {
     const rows = await getVisibleAlertRows(page);
@@ -1290,8 +1268,8 @@ async function deleteManagedAlerts(page, prefixes) {
       const txt = await getAlertTickerFromRow(row);
       if (!txt) continue;
 
-      const matched = prefixes.some((p) => txt.startsWith(`${p}_`) || txt.startsWith(`${p},`) || txt === p);
-      if (matched) {
+      const isManaged = prefixes.some((p) => txt.startsWith(`${p}_`) || txt.startsWith(`${p},`) || txt === p);
+      if (isManaged) {
         targetRow = row;
         targetText = txt;
         break;
@@ -1299,81 +1277,56 @@ async function deleteManagedAlerts(page, prefixes) {
     }
 
     if (!targetRow) {
-      console.log("No more managed alerts.");
+      console.log("No more managed alerts found to delete. Loop finished.");
+      await assertNoManagedAlertsRemain(page, prefixes);
       return;
     }
 
-    console.log("Deleting alert:", targetText);
+    console.log(`[delete round ${round + 1}] Deleting alert: "${targetText}"`);
 
     const actionRow = await getAlertActionRow(targetRow);
     await actionRow.scrollIntoViewIfNeeded().catch(() => {});
-    await actionRow.hover().catch(() => {});
-    await page.waitForTimeout(400);
 
-    let deletedByTrash = false;
-    const trashBtn = await findVisibleDeleteButtonWithin(actionRow, page);
+    await actionRow.hover({ force: true, timeout: 2000 }).catch(() => console.warn("Hover failed, but continuing."));
+    await page.waitForTimeout(500);
+
+    const trashBtn = await findVisibleDeleteButtonWithin(actionRow);
+
     if (trashBtn) {
-      const clicked = await clickBestEffort(trashBtn, 8000);
-      if (clicked) {
-        deletedByTrash = true;
-      }
+      console.log("Found a delete button, clicking it.");
+      await trashBtn.click({ force: true });
+    } else {
+      console.warn("No visible delete button found on hover. This might fail.");
+      // As a last resort, try clicking the row and pressing delete key
+      await actionRow.click().catch(() => {});
+      await page.waitForTimeout(100);
+      await page.keyboard.press('Delete').catch(() => {});
     }
+    
+    // Handle confirmation dialog if it appears. It's optional.
+    await confirmTradingViewDialog(page, true);
 
-    if (!deletedByTrash) {
-      const box = await actionRow.boundingBox().catch(() => null);
-      if (box) {
-        await page.mouse.move(box.x + Math.max(box.width - 12, 1), box.y + box.height / 2).catch(() => {});
-        await page.waitForTimeout(250);
-        await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2).catch(() => {});
-        await page.waitForTimeout(500);
-        const confirmDirect = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
-        if (await confirmDirect.isVisible().catch(() => false)) {
-          deletedByTrash = true;
-        }
-      }
-    }
-
-    if (!deletedByTrash) {
-      await actionRow.click({ force: true, timeout: 8000 }).catch(() => {});
-      await page.waitForTimeout(250);
-      await page.keyboard.press("Delete").catch(() => {});
-      await page.waitForTimeout(500);
-      const confirmByKey = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
-      if (await confirmByKey.isVisible().catch(() => false)) {
-        deletedByTrash = true;
-      }
-    }
-
-    if (!deletedByTrash) {
-      await actionRow.click({ button: "right", force: true, timeout: 8000 }).catch(() => {});
-      await page.waitForTimeout(500);
-        await safeScreenshot(page, `alert_delete_menu_not_found_${Date.now()}`);
-        throw new Error(`アラート削除メニューが見つかりませんでした: ${targetText}`);
-    }
-
-    // 確認ダイアログが出る場合はクリック（出ない場合はスキップ）
-    const confirm = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
-    if (await confirm.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await safeClick(confirm, { timeout: 5000, force: true });
-    }
-
+    // Verify deletion with increased patience
     let deleted = false;
-    for (let i = 0; i < 10; i++) {
-      await page.waitForTimeout(800);
-      const texts = await getManagedAlertTickerTexts(page, prefixes);
-      if (!texts.includes(targetText)) {
+    for (let i = 0; i < 20; i++) { // 20 seconds max wait
+      const currentTexts = await getAllAlertTickerTexts(page);
+      if (!currentTexts.some(t => t === targetText)) {
+        console.log(`Successfully verified deletion of "${targetText}"`);
         deleted = true;
         break;
       }
+      await page.waitForTimeout(1000);
     }
 
     if (!deleted) {
       await safeScreenshot(page, `alert_delete_not_reflected_${Date.now()}`);
-      throw new Error(`アラート削除後も項目が残っています: ${targetText}`);
+      const finalTexts = await getAllAlertTickerTexts(page);
+      console.error("Final alert texts:", finalTexts);
+      throw new Error(`Failed to verify alert deletion for: "${targetText}".`);
     }
   }
 
-  throw new Error("アラート削除ループが上限に達しました");
+  throw new Error("Alert deletion loop reached max rounds (200).");
 }
 
 async function openWatchlistMenuHard(page, retryCount = 8) {
@@ -1438,9 +1391,7 @@ async function openWatchlistMenuHard(page, retryCount = 8) {
   }
   throw new Error('ウォッチリストメニューを規定回数内に開けませんでした。判定用セレクタが正しいか再確認が必要です。');
 }
-// ==============================
-// Watchlist alert promo dialog
-// ==============================
+// ==============================\n// Watchlist alert promo dialog\n// ==============================
 async function isWatchlistPromoDialogVisible(page) {
   const markers = [
     page.getByText(/One alert to track an entire watchlist/i).first(),
@@ -1510,7 +1461,7 @@ async function getCurrentWatchlistHeaderState(page) {
   await btn.waitFor({ state: "visible", timeout: 10000 });
 
   const text = ((await btn.textContent().catch(() => "")) || "")
-    .replace(/\s+/g, " ")
+    .replace(/\\s+/g, " ")
     .trim();
 
   const iconCount = await btn.locator("svg").count().catch(() => 0);
@@ -1539,14 +1490,14 @@ async function waitForWatchlistAlertMarker(page, listName, beforeIconCount) {
 function normalizeTvText(s = "") {
   return String(s)
     .normalize("NFKC")
-    .replace(/[\u00A0\u2000-\u200B]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[\\u00A0\\u2000-\\u200B]/g, " ")
+    .replace(/\\s+/g, " ")
     .trim()
     .toLowerCase();
 }
 
 function compactTvText(s = "") {
-  return normalizeTvText(s).replace(/\s+/g, "");
+  return normalizeTvText(s).replace(/\\s+/g, "");
 }
 
 function isTarget4hText(s = "") {
@@ -1585,7 +1536,7 @@ async function readLocatorTextWithAttrs(locator) {
         el.getAttribute("title") || "",
         el.getAttribute("data-value") || "",
       ].filter(Boolean);
-      return bits.join(" | ").replace(/\s+/g, " ").trim();
+      return bits.join(" | ").replace(/\\s+/g, " ").trim();
     });
   } catch {
     return "";
@@ -1635,7 +1586,7 @@ async function getCurrentChartTimeframeText(page) {
     const el = buttons.nth(i);
     if (!(await el.isVisible().catch(() => false))) continue;
     const txt = await readLocatorTextWithAttrs(el);
-    if (/\b(1s|5s|15s|1m|3m|5m|15m|30m|45m|1h|2h|3h|4h|1d|d|1w|w|1mo|mo)\b/i.test(txt) || /4 ?時間/i.test(txt)) {
+    if (/\\b(1s|5s|15s|1m|3m|5m|15m|30m|45m|1h|2h|3h|4h|1d|d|1w|w|1mo|mo)\\b/i.test(txt) || /4 ?時間/i.test(txt)) {
       return txt;
     }
   }
@@ -1692,7 +1643,7 @@ async function openChartTimeframeMenu(page) {
     const el = buttons.nth(i);
     if (!(await el.isVisible().catch(() => false))) continue;
     const txt = await readLocatorTextWithAttrs(el);
-    if (!(/\b(1s|5s|15s|1m|3m|5m|15m|30m|45m|1h|2h|3h|4h|1d|d|1w|w|1mo|mo)\b/i.test(txt) || /4 ?時間/i.test(txt))) {
+    if (!(/\\b(1s|5s|15s|1m|3m|5m|15m|30m|45m|1h|2h|3h|4h|1d|d|1w|w|1mo|mo)\\b/i.test(txt) || /4 ?時間/i.test(txt))) {
       continue;
     }
 
@@ -1758,7 +1709,7 @@ async function findTimeframeMenuRoot(page) {
       if (!(await root.isVisible().catch(() => false))) continue;
       const text = normalizeTvText(await root.textContent().catch(() => ""));
       // 複数の時間足文字列（"1m","5m","1h","4h","1d" など）を2つ以上含む
-      const tfCount = (text.match(/\b(1m|5m|15m|30m|1h|2h|3h|4h|6h|12h|1d|1w|1mo)\b/gi) || []).length;
+      const tfCount = (text.match(/\\b(1m|5m|15m|30m|1h|2h|3h|4h|6h|12h|1d|1w|1mo)\\b/gi) || []).length;
       if (tfCount >= 2) return root;
     }
   }
@@ -1776,9 +1727,7 @@ async function findTimeframeMenuRoot(page) {
   return null;
 }
 
-// ==============================
-// Change interval ダイアログ対応 (追加)
-// ==============================
+// ==============================\n// Change interval ダイアログ対応 (追加)\n// ==============================
 async function isChangeIntervalDialogOpen(page) {
   return await page.getByText(/^Change interval$/i).first().isVisible().catch(() => false);
 }
@@ -1915,7 +1864,7 @@ async function logChartTimeframeMenuState(page, tag = "chart-timeframe") {
 
 async function ensureChartTimeframe(page, targetLabel = "4 時間") {
   const before = await getCurrentChartTimeframeText(page);
-  console.log(`[timeframe] current chart timeframe before change: "${before}"`);
+  console.log(`[timeframe] current chart timeframe before change: \"${before}\"`);
 
   if (isTarget4hText(before)) {
     console.log("[timeframe] chart is already 4H");
@@ -1952,7 +1901,7 @@ async function ensureChartTimeframe(page, targetLabel = "4 時間") {
       const ok = await select4hFromMenu(page, root);
       if (!ok) {
         await safeScreenshot(page, "chart_4h_not_found");
-        throw new Error(`チャート時間足 "${targetLabel}" が見つかりませんでした`);
+        throw new Error(`チャート時間足 \"${targetLabel}\" が見つかりませんでした`);
       }
     }
   }
@@ -1960,11 +1909,11 @@ async function ensureChartTimeframe(page, targetLabel = "4 時間") {
   await page.waitForTimeout(1200);
 
   const after = await getCurrentChartTimeframeText(page);
-  console.log(`[timeframe] current chart timeframe after change: "${after}"`);
+  console.log(`[timeframe] current chart timeframe after change: \"${after}\"`);
 
   if (!isTarget4hText(after)) {
     await safeScreenshot(page, "chart_timeframe_verify_failed");
-    throw new Error(`チャート時間足の変更確認に失敗しました。現在: "${after}"`);
+    throw new Error(`チャート時間足の変更確認に失敗しました。現在: \"${after}\"`);
   }
 }
 
@@ -2004,9 +1953,9 @@ async function logAlertIntervalState(page, tag = 'alert-interval') {
   }
 
   const chartTf = await getCurrentChartTimeframeText(page);
-  console.log(`[${tag}] current chart timeframe: "${chartTf}"`);
+  console.log(`[${tag}] current chart timeframe: \"${chartTf}\"`);
 
-  const dialogText = ((await dialog.textContent().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+  const dialogText = ((await dialog.textContent().catch(() => '')) || '').replace(/\\s+/g, ' ').trim();
   console.log(`[${tag}] dialog text preview:`, dialogText.slice(0, 400));
 
   const buttonTexts = await collectVisibleTexts(dialog.locator('button, [role="button"], [role="combobox"]'), 120);
@@ -2020,7 +1969,7 @@ async function logAlertIntervalState(page, tag = 'alert-interval') {
   }
 
   const intervalText = await readLocatorTextWithAttrs(intervalBtn);
-  console.log(`[${tag}] interval button text: "${intervalText}"`);
+  console.log(`[${tag}] interval button text: \"${intervalText}\"`);
 
   await safeScreenshot(page, tag);
 }
@@ -2042,12 +1991,12 @@ async function verifyAlertIntervalIsSameAsChart(page) {
   const chartTf = await getCurrentChartTimeframeText(page);
 
   if (isSameAsChartText(txt)) {
-    console.log(`[alert] interval is Same as chart: "${txt}"`);
+    console.log(`[alert] interval is Same as chart: \"${txt}\"`);
     return;
   }
 
   if (isTarget4hText(txt) && isTarget4hText(chartTf)) {
-    console.log(`[alert] interval text is explicit 4H while chart is 4H. accepted: "${txt}"`);
+    console.log(`[alert] interval text is explicit 4H while chart is 4H. accepted: \"${txt}\"`);
     return;
   }
 
@@ -2055,9 +2004,7 @@ async function verifyAlertIntervalIsSameAsChart(page) {
   throw new Error(`Alert の Interval が想定外でした: ${txt}`);
 }
 
-// ==============================
-// Create alert helpers
-// ==============================
+// ==============================\n// Create alert helpers\n// ==============================
 async function clickAddAlertToList(page) {
   const re = /リストに(高度な)?アラートを追加|Add( advanced)? alert( to list)?|アラートを追加/i;
 
@@ -2182,7 +2129,7 @@ async function getAlertDialogRoot(page) {
     const d = roleDialogs.nth(i);
     if (!(await d.isVisible().catch(() => false))) continue;
 
-    const txt = ((await d.textContent().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+    const txt = ((await d.textContent().catch(() => '')) || '').replace(/\\s+/g, ' ').trim();
     if (/Create alert on|アラートを作成|Open-ended alert|Once only|Toasts|Webhook|Cancel|Create/i.test(txt)) {
       return d;
     }
@@ -2204,7 +2151,7 @@ async function ensureAlertTargetList(page, listName) {
     throw new Error(`アラート対象リスト確認時にダイアログが見つかりませんでした: ${listName}`);
   }
 
-  const dialogText = ((await dialog.textContent().catch(() => "")) || "").replace(/\s+/g, " ");
+  const dialogText = ((await dialog.textContent().catch(() => "")) || "").replace(/\\s+/g, " ");
 
   if (dialogText.includes(listName)) {
     console.log(`Alert target list confirmed in dialog: ${listName}`);
@@ -2240,7 +2187,7 @@ async function ensureAlertTargetList(page, listName) {
 
     await page.waitForTimeout(700);
 
-    const recheckText = ((await dialog.textContent().catch(() => "")) || "").replace(/\s+/g, " ");
+    const recheckText = ((await dialog.textContent().catch(() => "")) || "").replace(/\\s+/g, " ");
     if (recheckText.includes(listName)) {
       console.log(`Alert target list corrected and confirmed: ${listName}`);
       return;
@@ -2300,7 +2247,7 @@ async function submitAlertDialog(page) {
       const promoText = await getWatchlistPromoDialogText(page);
 
       console.log(`[promo] Watchlist promo dialog detected (${promoRetryCount}/${WATCHLIST_PROMO_RETRY_MAX})`);
-      console.log(`[promo] ${promoText.replace(/\s+/g, " ").slice(0, 500)}`);
+      console.log(`[promo] ${promoText.replace(/\\s+/g, " ").slice(0, 500)}`);
 
       await safeScreenshot(page, `watchlist_promo_detected_${promoRetryCount}`);
 
@@ -2344,248 +2291,3 @@ async function submitAlertDialog(page) {
 
     const errorText = await page.locator("body").textContent().catch(() => "");
     if (/limit|上限|too many alerts|アラート数|cannot create|作成できません|プラン/i.test(errorText || "")) {
-      await safeScreenshot(page, "alert_submit_limit_error");
-      throw new Error("アラート作成時に上限または作成失敗メッセージを検知しました");
-    }
-
-    if (i < 19) {
-      console.log("Dialog still visible, retrying click...");
-      await clickBestEffort(targetBtn, 5000);
-    }
-  }
-
-  if (!dialogClosed) {
-    await safeScreenshot(page, "alert_submit_dialog_not_closed");
-    throw new Error("アラート作成ダイアログが閉じませんでした。作成失敗の可能性があります");
-  }
-
-  await page.waitForTimeout(3000);
-}
-
-async function assertManagedAlertCreated(page, listName) {
-  await ensureAlertsPanelOpen(page);
-
-  let found = false;
-
-  for (let i = 0; i < 15; i++) {
-    await page.waitForTimeout(1200);
-
-    const tickerItems = page.locator('[data-name="alert-item-ticker"]');
-    const count = await tickerItems.count().catch(() => 0);
-
-    for (let j = 0; j < count; j++) {
-      const txt = (await tickerItems.nth(j).textContent().catch(() => "")).trim();
-      if (txt.includes(listName) || txt.startsWith(listName)) {
-        found = true;
-        break;
-      }
-    }
-
-    if (found) break;
-  }
-
-  if (!found) {
-    await safeScreenshot(page, `alert_not_created_${Date.now()}`);
-    throw new Error(`アラート作成後の確認に失敗しました: ${listName}`);
-  }
-}
-
-async function createWatchlistAlertIfPossible(page, listName) {
-  console.log("Creating alert for:", listName);
-
-  try {
-    await switchWatchlistTo(page, listName);
-    await page.waitForTimeout(4000);
-
-    await ensureChartTimeframe(page, ALERT_TIMEFRAME_LABEL || "4 時間");
-
-    const chartTf = await getCurrentChartTimeframeText(page);
-    console.log(`[alert] chart timeframe before create: "${chartTf}"`);
-
-    // 作成前のヘッダー状態を保持
-    const beforeHeader = await getCurrentWatchlistHeaderState(page);
-    console.log(
-      `[before-create] watchlist="${beforeHeader.text}" icons=${beforeHeader.iconCount}`
-    );
-
-    await clickAddAlertToList(page);
-    await ensureAlertTargetList(page, listName);
-    await logAlertIntervalState(page, `dialog-opened-${listName}`);
-
-    await selectAlertCondition(page, ALERT_CONDITION_NAME);
-    await logAlertIntervalState(page, `condition-selected-${listName}`);
-
-    await verifyAlertIntervalIsSameAsChart(page);
-
-    await safeScreenshot(page, `before_alert_submit_${listName}`);
-    await submitAlertDialog(page);
-    await safeScreenshot(page, `after_alert_submit_${listName}`);
-
-    // まずはウォッチリストヘッダーの時計アイコン増加で確認
-    const marked = await waitForWatchlistAlertMarker(
-      page,
-      listName,
-      beforeHeader.iconCount
-    );
-
-    if (marked) {
-      console.log(`Alert marker detected on watchlist header: ${listName}`);
-      return;
-    }
-
-    // フォールバック: Alerts一覧確認（ただしここで即死させない）
-    console.log(
-      `[fallback] header marker not detected. trying alerts panel check: ${listName}`
-    );
-
-    try {
-      await assertManagedAlertCreated(page, listName);
-      console.log(`Alert confirmed in alerts list: ${listName}`);
-      return;
-    } catch (e) {
-      await safeScreenshot(page, `alert_confirm_failed_${listName}`);
-      throw new Error(
-        `アラート作成後の確認に失敗しました: ${listName} / ${e?.message || e}`
-      );
-    }
-  } catch (err) {
-    console.error(`[alert] failed for watchlist="${listName}":`, err?.message || err);
-    await debugDump(page, `error_${listName}`);
-    await safeScreenshot(page, `failed_${listName}`);
-    throw err;
-  }
-}
-
-async function dumpAlertTickerTexts(page) {
-  const arr = await getAllAlertTickerTexts(page);
-  console.log("Current alert ticker texts:", JSON.stringify(arr, null, 2));
-}
-
-// ==============================
-// Main
-// ==============================
-(async () => {
-  let browser;
-  let context;
-  let page;
-  let deletedAlertsThisRun = false;
-
-  try {
-    reqEnv("TRADINGVIEW_STORAGE_STATE", TRADINGVIEW_STORAGE_STATE);
-    reqEnv("WATCHLIST_1_URL", WATCHLIST_1_URL);
-
-    ensureDir(WORKDIR);
-
-    console.log("WATCHLIST_1_FINAL_NAME:", WATCHLIST_1_FINAL_NAME);
-    console.log("WATCHLIST_2_FINAL_NAME:", WATCHLIST_2_FINAL_NAME);
-
-    console.log("Downloading watchlists...");
-
-    const activeLists = [];
-
-    await downloadToFile(WATCHLIST_1_URL, OUT1, "WATCHLIST_1_URL");
-    activeLists.push({
-      path: OUT1,
-      prefix: WATCHLIST_1_PREFIX,
-      finalName: WATCHLIST_1_FINAL_NAME,
-    });
-
-    const hasSecond = await downloadOptionalToFile(WATCHLIST_2_URL, OUT2, "WATCHLIST_2_URL");
-    if (hasSecond) {
-      activeLists.push({
-        path: OUT2,
-        prefix: WATCHLIST_2_PREFIX,
-        finalName: WATCHLIST_2_FINAL_NAME,
-      });
-    }
-
-    console.log(`Active watchlists: ${activeLists.length}`);
-
-    console.log("Launching Playwright...");
-    browser = await chromium.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-dev-shm-usage"],
-    });
-
-    const storageState = JSON.parse(TRADINGVIEW_STORAGE_STATE);
-    context = await browser.newContext({
-      storageState,
-      viewport: { width: 1600, height: 1200 },
-    });
-    page = await context.newPage();
-
-    page.setDefaultTimeout(STEP_TIMEOUT);
-    page.setDefaultNavigationTimeout(NAV_TIMEOUT);
-
-    console.log("Opening TradingView...");
-    await page.goto("https://www.tradingview.com/chart/", { waitUntil: "domcontentloaded" });
-    await page.waitForLoadState("networkidle").catch(() => {});
-    await waitForTradingViewReady(page);  // 新しい関数を使用
-
-    // ログイン状態確認（必要に応じて）
-    const needLogin = await page.getByText(/Sign in|ログイン/i).first().isVisible().catch(() => false);
-    if (needLogin) {
-      await safeScreenshot(page, "need_login");
-      throw new Error("TradingView がログイン状態ではありません");
-    }
-
-    if (DO_DELETE_ALERTS) {
-      console.log("Before delete: alert ticker dump");
-      await dumpAlertTickerTexts(page);
-
-      console.log("Deleting old alerts...");
-      await deleteManagedAlerts(page, [WATCHLIST_1_PREFIX, WATCHLIST_2_PREFIX]);
-      await assertNoManagedAlertsRemain(page, [WATCHLIST_1_PREFIX, WATCHLIST_2_PREFIX]);
-
-      console.log("After delete: alert ticker dump");
-      await dumpAlertTickerTexts(page);
-
-      deletedAlertsThisRun = true;
-    }
-
-    if (DO_DELETE_WATCHLISTS) {
-      console.log("Deleting old watchlists...");
-      await deleteManagedWatchlistsByPrefix(page, WATCHLIST_1_PREFIX);
-      await deleteManagedWatchlistsByPrefix(page, WATCHLIST_2_PREFIX);
-    }
-
-    if (DO_IMPORT_WATCHLISTS) {
-      console.log("Importing watchlists...");
-      for (const list of activeLists) {
-        await importWatchlistFromFile(page, list.path, list.finalName);
-        await assertWatchlistExists(page, list.finalName);
-      }
-    }
-
-    if (DO_CREATE_WATCHLIST_ALERT) {
-      if (deletedAlertsThisRun) {
-        console.log(`Waiting ${ALERT_SLOT_RELEASE_WAIT_MS}ms for TradingView alert slot release...`);
-        await page.waitForTimeout(ALERT_SLOT_RELEASE_WAIT_MS);
-      }
-
-      console.log("Creating watchlist alerts...");
-      for (const list of activeLists) {
-        await createWatchlistAlertIfPossible(page, list.finalName);
-      }
-
-      console.log("After create: alert ticker dump");
-      try {
-        await dumpAlertTickerTexts(page);
-      } catch (e) {
-        console.log("Skip alert ticker dump after create:", e?.message || e);
-      }
-    }
-    
-    console.log("DONE.");
-    await safeScreenshot(page, "done");
-    await browser.close();
-  } catch (err) {
-    console.error("FAILED:", err?.message || err);
-    if (page) {
-      await debugDump(page, "final_error");
-      await safeScreenshot(page, "failed");
-    }
-    if (browser) await browser.close().catch(() => {});
-    process.exit(1);
-  }
-})();
