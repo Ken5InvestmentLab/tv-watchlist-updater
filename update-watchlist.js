@@ -789,7 +789,10 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     await page.waitForTimeout(500);
 
     // 対象の行を再度取得
-    const row = page.locator(
+const row = page.locator(
+  `[data-qa-id="menu-inner"] :is([class*="item-"], [role="menuitem"], [data-role="list-item"], div):has-text("${target.name}")`
+).first();
+await row.waitFor({ state: "visible", timeout: 10000 });
 
 // ホバーして削除ボタンを表示
 await row.hover();
