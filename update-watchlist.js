@@ -130,6 +130,29 @@ async function firstVisible(locator, max = 30) {
   return null;
 }
 
+async function findVisibleDeleteButtonWithin(scope) {
+  const deleteBtnSelectors = [
+    'button[data-name="remove-button"]',
+    'button[data-name="delete-button"]',
+    'button[data-qa-id="remove-button"]',
+    '[data-qa-id="remove-button"]',
+    'button[aria-label*="削除"]',
+    'button[aria-label*="Delete"]',
+    'button[aria-label*="Remove"]',
+    'button[class*="remove"]',
+    'button[class*="delete"]',
+    'button:has([data-name*="trash"])',
+    'button:has([class*="trash"])',
+  ];
+
+  for (const sel of deleteBtnSelectors) {
+    const btn = scope.locator(sel).first();
+    if (await btn.isVisible().catch(() => false)) return btn;
+  }
+
+  return null;
+}
+
 // ==============================
 // Base UI: Watchlist panel / menu (UI変更に強い版)
 // ==============================
@@ -766,46 +789,23 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     await page.waitForTimeout(500);
 
     // 対象の行を再度取得
-    const row = page.locator(`[data-qa-id="menu-inner"] :has-text("${target.name}"), [role="menuitem"]:has-text("${target.name}")`).first();
+    const row = page.locator(
+      `[data-qa-id="menu-inner"] :is([class*="item-"], [role="menuitem"], [data-role="list-item"], div):has-text("${target.name}")`
+    ).first();
     await row.waitFor({ state: "visible", timeout: 10000 });
 
     // ホバーして削除ボタンを表示
     await row.hover();
     await page.waitForTimeout(500);
 
-    // 削除ボタン（ゴミ箱）を探す
-    const deleteBtnSelectors = [
-      'button[data-name="remove-button"]',
-      'button[data-name="delete-button"]',
-      'button[aria-label*="削除"]',
-      'button[aria-label*="Delete"]',
-      'button[aria-label*="Remove"]',
-      'button[class*="remove"]',
-      'button[class*="delete"]',
-      '[data-qa-id="remove-button"]',
-      'button svg[class*="trash"]',
-      'button:has(svg[class*="trash"])'
-    ];
-    
-    let deleteBtn = null;
-    for (const sel of deleteBtnSelectors) {
-      const btn = row.locator(sel).first();
-      if (await btn.isVisible().catch(() => false)) {
-        deleteBtn = btn;
-        break;
-      }
-    }
-    
+    let deleteBtn = await findVisibleDeleteButtonWithin(row);
     if (!deleteBtn) {
-      // フォールバック：行内のすべてのボタンをチェック
-      const allButtons = row.locator('button');
-      const btnCount = await allButtons.count();
-      for (let i = 0; i < btnCount; i++) {
-        const btn = allButtons.nth(i);
-        if (await btn.isVisible().catch(() => false)) {
-          deleteBtn = btn;
-          break;
-        }
+      const box = await row.boundingBox().catch(() => null);
+      if (box) {
+        // 右端に出るホバーゴミ箱を直接クリック（UI変更対策）
+        await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2).catch(() => {});
+        await page.waitForTimeout(400);
+        deleteBtn = await findVisibleDeleteButtonWithin(row);
       }
     }
 
@@ -978,6 +978,12 @@ async function describeLocator(locator) {
 
 async function findAlertsPanelToggle(page) {
   const attrSelector = [
+    'button[data-name="alerts"]',
+    'button[data-name="alerts-button"]',
+    'button[data-name="alerts-widget-button"]',
+    'button[data-qa-id="alerts-button"]',
+    '[role="button"][data-name="alerts"]',
+
     'button[aria-label*="Alerts" i]',
     'button[aria-label*="アラート"]',
     '[role="button"][aria-label*="Alerts" i]',
@@ -1018,14 +1024,32 @@ async function findAlertsPanelToggle(page) {
   return null;
 }
 
+async function closeCreateAlertDialogIfVisible(page) {
+  const title = page.getByText(/Create alert on|アラートを作成/i).first();
+  const visible = await title.isVisible().catch(() => false);
+  if (!visible) return false;
+
+  const closeBtn = page.locator('[role="dialog"] button[aria-label="Close"], [role="dialog"] button[aria-label="閉じる"]').first();
+  if (await closeBtn.isVisible().catch(() => false)) {
+    await clickBestEffort(closeBtn, 4000);
+    await page.waitForTimeout(600);
+    return true;
+  }
+
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.waitForTimeout(600);
+  return true;
+}
+
 async function isAlertsContentReady(page) {
   const markers = [
     page.locator('[data-name="alert-item-ticker"]').first(),
     page.locator('[data-name="alerts-manager"]').first(),
     page.locator('[data-name="alerts-list"]').first(),
     page.locator('[data-qa-id="alerts-list"]').first(),
-    page.locator('[data-name*="alert" i]').first(),
-    page.locator('[data-qa-id*="alert" i]').first(),
+    page.locator('[data-name="alerts-log"], [data-name="alerts-log-pane"]').first(),
+    page.locator('[data-name="alerts-list-wrapper"], [data-qa-id="alerts-list-wrapper"]').first(),
+    page.locator('[data-name="alert-item"], [data-role="alert-item"], [data-qa-id*="alert-item"]').first(),
     page
       .getByText(
         /No alerts|No alerts created|アラートがありません|アラートはありません|アラートなし/i
@@ -1056,6 +1080,7 @@ async function isAlertsSidebarOpen(page) {
 async function openAlertsPanel(page) {
   for (let attempt = 0; attempt < 6; attempt++) {
     await closeAnyMenu(page);
+    await closeCreateAlertDialogIfVisible(page);
 
     const toggle = await findAlertsPanelToggle(page);
     if (toggle) {
@@ -1067,6 +1092,7 @@ async function openAlertsPanel(page) {
       const clicked = await clickBestEffort(toggle, 8000);
       if (clicked) {
         await page.waitForTimeout(1500);
+        await closeCreateAlertDialogIfVisible(page);
         if (await isAlertsSidebarOpen(page)) {
           return;
         }
@@ -1150,17 +1176,62 @@ async function ensureAlertsPanelOpen(page) {
 async function getAllAlertTickerTexts(page) {
   await ensureAlertsPanelOpen(page);
 
-  const tickerItems = page.locator('[data-name="alert-item-ticker"]');
-  const count = await tickerItems.count().catch(() => 0);
+  const rows = await getVisibleAlertRows(page);
   const arr = [];
-
-  for (let i = 0; i < count; i++) {
-    const txt = ((await tickerItems.nth(i).textContent().catch(() => "")) || "").trim();
+  for (const row of rows) {
+    const txt = await getAlertTickerFromRow(row);
     if (txt) arr.push(txt);
   }
 
   console.log("Detected alert ticker count:", arr.length);
   return arr;
+}
+
+async function getVisibleAlertRows(page) {
+  const rowSelectors = [
+    '[data-name="alert-item"]',
+    '[data-role="alert-item"]',
+    '[data-qa-id*="alert-item"]',
+    '[data-name*="alert-row"]',
+    '[class*="alertItem"]',
+    '[class*="alert-row"]',
+    '[class*="itemRow"][class*="alert"]',
+  ];
+
+  for (const sel of rowSelectors) {
+    const rows = page.locator(sel);
+    const count = Math.min(await rows.count().catch(() => 0), 300);
+    if (!count) continue;
+
+    const visible = [];
+    for (let i = 0; i < count; i++) {
+      const row = rows.nth(i);
+      if (await row.isVisible().catch(() => false)) visible.push(row);
+    }
+    if (visible.length > 0) return visible;
+  }
+
+  const tickerItems = page.locator('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]');
+  const tickerCount = Math.min(await tickerItems.count().catch(() => 0), 300);
+  const tickerRows = [];
+  for (let i = 0; i < tickerCount; i++) {
+    const row = tickerItems.nth(i).locator(
+      'xpath=ancestor::*[@data-name="alert-item" or @data-role="alert-item" or contains(@class,"alert")][1]'
+    ).first();
+    if (await row.isVisible().catch(() => false)) tickerRows.push(row);
+  }
+  return tickerRows;
+}
+
+async function getAlertTickerFromRow(row) {
+  const directTicker = row.locator('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]').first();
+  if (await directTicker.isVisible().catch(() => false)) {
+    return ((await directTicker.textContent().catch(() => "")) || "").trim();
+  }
+
+  const fallbackText = ((await row.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+  const token = fallbackText.split(" ")[0] || "";
+  return token;
 }
 
 async function getManagedAlertTickerTexts(page, prefixes) {
@@ -1182,41 +1253,68 @@ async function deleteManagedAlerts(page, prefixes) {
   await ensureAlertsPanelOpen(page);
 
   for (let round = 0; round < 200; round++) {
-    const tickerItems = page.locator('[data-name="alert-item-ticker"]');
-    const count = await tickerItems.count().catch(() => 0);
-
-    let target = null;
+    const rows = await getVisibleAlertRows(page);
+    let targetRow = null;
     let targetText = "";
 
-    for (let i = 0; i < count; i++) {
-      const txt = (await tickerItems.nth(i).textContent().catch(() => "")).trim();
+    for (const row of rows) {
+      const txt = await getAlertTickerFromRow(row);
       if (!txt) continue;
 
       const matched = prefixes.some((p) => txt.startsWith(`${p}_`) || txt.startsWith(`${p},`) || txt === p);
       if (matched) {
-        target = tickerItems.nth(i);
+        targetRow = row;
         targetText = txt;
         break;
       }
     }
 
-    if (!target) {
+    if (!targetRow) {
       console.log("No more managed alerts.");
       return;
     }
 
     console.log("Deleting alert:", targetText);
 
-    await target.scrollIntoViewIfNeeded().catch(() => {});
-    await target.click({ button: "right", force: true, timeout: 8000 }).catch(() => {});
-    await page.waitForTimeout(500);
+    await targetRow.scrollIntoViewIfNeeded().catch(() => {});
+    await targetRow.hover().catch(() => {});
+    await page.waitForTimeout(400);
 
-    const del = page.locator('tr[data-role="menuitem"]').filter({ hasText: /^削除$|Delete/i }).first();
-    const ok = await safeClick(del, { timeout: 8000, force: true });
+    let deletedByTrash = false;
+    const trashBtn = await findVisibleDeleteButtonWithin(targetRow);
+    if (trashBtn) {
+      const clicked = await clickBestEffort(trashBtn, 8000);
+      if (clicked) {
+        deletedByTrash = true;
+      }
+    }
 
-    if (!ok) {
-      await safeScreenshot(page, `alert_delete_menu_not_found_${Date.now()}`);
-      throw new Error(`アラート削除メニューが見つかりませんでした: ${targetText}`);
+    if (!deletedByTrash) {
+      const box = await targetRow.boundingBox().catch(() => null);
+      if (box) {
+        await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2).catch(() => {});
+        await page.waitForTimeout(500);
+        const confirmDirect = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
+        if (await confirmDirect.isVisible().catch(() => false)) {
+          deletedByTrash = true;
+        }
+      }
+    }
+
+    if (!deletedByTrash) {
+      await targetRow.click({ button: "right", force: true, timeout: 8000 }).catch(() => {});
+      await page.waitForTimeout(500);
+
+      const del = page
+        .locator('[role="menuitem"], tr[data-role="menuitem"], [data-role="menuitem"]')
+        .filter({ hasText: /^削除$|^Delete$/i })
+        .first();
+      const ok = await safeClick(del, { timeout: 8000, force: true });
+
+      if (!ok) {
+        await safeScreenshot(page, `alert_delete_menu_not_found_${Date.now()}`);
+        throw new Error(`アラート削除メニューが見つかりませんでした: ${targetText}`);
+      }
     }
 
     const confirm = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
