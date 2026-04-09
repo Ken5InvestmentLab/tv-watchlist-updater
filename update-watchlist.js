@@ -1325,7 +1325,7 @@ async function deleteManagedAlerts(page, prefixes) {
       ];
       for (const sel of selectors) {
         const btn = row.querySelector(sel);
-        if (btn) {
+        if (btn && typeof btn.click === 'function') {
           btn.click();
           return true;
         }
@@ -1338,7 +1338,7 @@ async function deleteManagedAlerts(page, prefixes) {
         setTimeout(() => {
           for (const sel of selectors) {
             const btn = row.querySelector(sel);
-            if (btn) {
+            if (btn && typeof btn.click === 'function') {
               btn.click();
               resolve(true);
               return;
@@ -1365,11 +1365,10 @@ async function deleteManagedAlerts(page, prefixes) {
         const menuDeleted = await page.evaluate(() => {
           const menu = document.querySelector('[data-role="menu"], [role="menu"]');
           if (!menu) return false;
-          const deleteItem = Array.from(menu.querySelectorAll('[data-role="menuitem"], [role="menuitem"]')).find(el =>
-            /削除|Delete/i.test(el.textContent || '')
-          );
-          if (deleteItem) {
-            (deleteItem as HTMLElement).click();
+          const items = Array.from(menu.querySelectorAll('[data-role="menuitem"], [role="menuitem"]'));
+          const deleteItem = items.find(el => /削除|Delete/i.test(el.textContent || ''));
+          if (deleteItem && typeof deleteItem.click === 'function') {
+            deleteItem.click();
             return true;
           }
           return false;
