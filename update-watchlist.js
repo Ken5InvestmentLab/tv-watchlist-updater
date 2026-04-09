@@ -142,7 +142,6 @@ async function findVisibleDeleteButtonWithin(scope) {
     'button[class*="remove"]',
     'button[class*="delete"]',
     'button:has([data-name*="trash"])',
-    'button:has([class*="trash"])'
   ];
 
   for (const sel of deleteBtnSelectors) {
@@ -789,28 +788,6 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     await page.waitForTimeout(500);
 
     // 対象の行を再度取得
-const row = page.locator(
-  `[data-qa-id="menu-inner"] :is([class*="item-"], [role="menuitem"], [data-role="list-item"], div):has-text("${target.name}")`
-).first();
-await row.waitFor({ state: "visible", timeout: 10000 });
-
-// ホバーして削除ボタンを表示
-await row.hover();
-await page.waitForTimeout(500);
-
-if (!deleteBtn) {
-  console.log(`[delete] 削除ボタンが見つからないため、右クリックメニューを使用: ${target.name}`);
-  await row.click({ button: "right", force: true });
-  await page.waitForTimeout(500);
-  const delMenuItem = page.locator('[role="menuitem"]:has-text("削除"), [role="menuitem"]:has-text("Delete")').first();
-  if (await delMenuItem.isVisible().catch(() => false)) {
-    await delMenuItem.click({ force: true });
-  } else {
-    throw new Error(`削除ボタンも右クリックメニューも使えません: ${target.name}`);
-  }
-} else {
-  await deleteBtn.click({ force: true });
-}
 
     await page.waitForTimeout(500);
     await confirmTradingViewDialog(page);
@@ -1178,12 +1155,12 @@ async function getAllAlertTickerTexts(page) {
 
 async function getVisibleAlertRows(page) {
   const rowSelectors = [
+
     '[data-name="alert-item"]',
     '[data-role="alert-item"]',
     '[data-qa-id*="alert-item"]',
     '[data-name*="alert-row"]',
-    '[class*="alertItem"]',
-    '[class*="alert-row"]',
+
     '[class*="itemRow"][class*="alert"]',
   ];
 
@@ -1211,6 +1188,7 @@ async function getVisibleAlertRows(page) {
   }
   return tickerRows;
 }
+
 
 async function getAlertTickerFromRow(row) {
   const directTicker = row.locator('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]').first();
@@ -1265,22 +1243,7 @@ async function deleteManagedAlerts(page, prefixes) {
 
     console.log("Deleting alert:", targetText);
 
-    await targetRow.scrollIntoViewIfNeeded().catch(() => {});
-    await targetRow.hover().catch(() => {});
-    await page.waitForTimeout(400);
 
-    let deletedByTrash = false;
-    const trashBtn = await findVisibleDeleteButtonWithin(targetRow);
-    if (trashBtn) {
-      const clicked = await clickBestEffort(trashBtn, 8000);
-      if (clicked) {
-        deletedByTrash = true;
-      }
-    }
-
-    if (!deletedByTrash) {
-
-      await targetRow.click({ button: "right", force: true, timeout: 8000 }).catch(() => {});
       await page.waitForTimeout(500);
 
       const del = page
