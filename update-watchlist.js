@@ -1361,13 +1361,16 @@ async function deleteManagedAlerts(page, prefixes) {
       await page.waitForTimeout(500);
       const rowDump = await page.evaluate((row) => {
         const btns = Array.from(row.querySelectorAll('button, [role="button"], svg, div[class*="icon"], div[class*="button"]'));
-        return btns.map(b => ({
-          tag: b.tagName,
-          className: b.className,
-          ariaLabel: b.getAttribute('aria-label'),
-          dataName: b.getAttribute('data-name'),
-          text: b.textContent.trim()
-        })).filter(x => x.ariaLabel || x.dataName || x.text || (x.className && x.className.includes('icon')));
+        return btns.map(b => {
+          const cls = typeof b.className === 'string' ? b.className : String(b.getAttribute('class') || '');
+          return {
+            tag: b.tagName,
+            className: cls,
+            ariaLabel: b.getAttribute('aria-label'),
+            dataName: b.getAttribute('data-name'),
+            text: b.textContent.trim()
+          };
+        }).filter(x => x.ariaLabel || x.dataName || x.text || x.className.includes('icon') || x.className.includes('remove') || x.className.includes('close') || x.className.includes('button'));
       }, rowHandle);
       console.log("🛠️ [デバッグ] 行内のアイコン類:", JSON.stringify(rowDump, null, 2));
 
