@@ -1219,11 +1219,6 @@ async function getVisibleAlertRows(page) {
     if (!count) continue;
 
     const visible = [];
-    for (let i = 0; i < count; i++) {
-      const row = rows.nth(i);
-
-    }
-    if (visible.length > 0) return visible;
   }
 
   const tickerItems = page.locator('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]');
@@ -1251,6 +1246,7 @@ async function getAlertActionRow(row) {
 
   return row;
 }
+
 async function getAlertTickerFromRow(row) {
   const directTicker = row.locator('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]').first();
   if (await directTicker.isVisible().catch(() => false)) {
