@@ -146,6 +146,8 @@ async function findVisibleDeleteButtonWithin(scope) {
   ];
 
   for (const sel of deleteBtnSelectors) {
+    const btn = scope.locator(sel).first();
+    if (await btn.isVisible().catch(() => false)) return btn;
   }
 
   return null;
