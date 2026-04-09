@@ -1042,7 +1042,6 @@ async function isAlertsContentReady(page) {
     page.locator('[data-name="alerts-manager"]').first(),
     page.locator('[data-name="alerts-list"]').first(),
     page.locator('[data-qa-id="alerts-list"]').first(),
-    page.locator('[data-name="alerts-log"], [data-name="alerts-log-pane"]').first(),
     page.locator('[data-name="alerts-list-wrapper"], [data-qa-id="alerts-list-wrapper"]').first(),
     page.locator('[data-name="alert-item"], [data-role="alert-item"], [data-qa-id*="alert-item"]').first(),
     page
@@ -1198,13 +1197,10 @@ async function getAllAlertTickerTexts(page) {
 
 async function getVisibleAlertRows(page) {
   const rowSelectors = [
-    '[data-name="alerts-log-item"]',
-    '[data-name="alert-log-item"]',
     '[data-name="alert-item"]',
     '[data-role="alert-item"]',
     '[data-qa-id*="alert-item"]',
     '[data-name*="alert-row"]',
-    '[data-name*="log-item"]',
     '[class*="alertItem"]',
     '[class*="alert-row"]',
     '[class*="itemRow"]',
@@ -1337,7 +1333,6 @@ async function deleteManagedAlerts(page, prefixes) {
     if (!deletedByTrash) {
       await actionRow.click({ button: "right", force: true, timeout: 8000 }).catch(() => {});
       await page.waitForTimeout(500);
-
 
         await safeScreenshot(page, `alert_delete_menu_not_found_${Date.now()}`);
         throw new Error(`アラート削除メニューが見つかりませんでした: ${targetText}`);
