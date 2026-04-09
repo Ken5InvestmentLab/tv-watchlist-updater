@@ -812,34 +812,28 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     await row.hover();
     await page.waitForTimeout(800);
 
-    // デバッグ用: 行内のボタン類をダンプ
+    // デバッグ用: 行内の全HTMLをダンプして構造を見る
     const rowHandle = await row.elementHandle().catch(() => null);
     if (rowHandle) {
-      const rowDump = await page.evaluate((el) => {
-        const btns = Array.from(el.querySelectorAll('button, [role="button"], svg, div[class*="icon"], div[class*="button"]'));
-        return btns.map(b => {
-          const cls = typeof b.className === 'string' ? b.className : String(b.getAttribute('class') || '');
-          return {
-            tag: b.tagName,
-            className: cls,
-            ariaLabel: b.getAttribute('aria-label'),
-            dataName: b.getAttribute('data-name'),
-            text: b.textContent.trim()
-          };
-        }).filter(x => x.ariaLabel || x.dataName || x.text || x.className.includes('icon') || x.className.includes('remove') || x.className.includes('close') || x.className.includes('delete') || x.className.includes('button'));
-      }, rowHandle);
-      console.log(`🛠️ [デバッグ] ウォッチリスト行内のアイコン類 (${target.name}):`, JSON.stringify(rowDump, null, 2));
+      const htmlDump = await page.evaluate((el) => el.innerHTML, rowHandle);
+      console.log(`🛠️ [デバッグ] ウォッチリスト行の完全なHTML (${target.name}):`, htmlDump);
     }
 
     let deleteBtn = await findVisibleDeleteButtonWithin(row);
 
-    // Evaluateによる強制削除試行（UIが特殊な場合への対処）
+    // HTML内にSVGやボタンがあるはずなので直接クリック試行
     if (!deleteBtn && rowHandle) {
       const clicked = await page.evaluate((el) => {
-        const items = Array.from(el.querySelectorAll('[data-name*="remove"], [data-name*="delete"], [class*="remove"], [class*="delete"]'));
-        const target = items[0];
+        // [aria-label="Add to favorites"] 以外のボタンや、右端にありそうな要素を片っ端からクリック
+        const items = Array.from(el.querySelectorAll('button:not([aria-label="Add to favorites"]), svg:not([class*="star"])'));
+        // 念のため一番最後尾の要素（右端のXボタンであることが多い）を狙う
+        const target = items[items.length - 1];
         if (target && typeof target.click === 'function') {
           target.click();
+          return true;
+        } else if (target) {
+          // SVG等の場合click関数がないかもしれないのでイベント発火
+          target.dispatchEvent(new MouseEvent('click', { bubbles: true }));
           return true;
         }
         return false;
