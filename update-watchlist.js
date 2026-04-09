@@ -132,16 +132,17 @@ async function firstVisible(locator, max = 30) {
 
 async function findVisibleDeleteButtonWithin(scope) {
   const deleteBtnSelectors = [
-    'button[data-name="remove-button"]',
-    'button[data-name="delete-button"]',
-    'button[data-qa-id="remove-button"]',
-    '[data-qa-id="remove-button"]',
-    'button[aria-label*="削除"]',
-    'button[aria-label*="Delete"]',
-    'button[aria-label*="Remove"]',
-    'button[class*="remove"]',
-    'button[class*="delete"]',
-    'button:has([data-name*="trash"])',
+    '[data-name="alerts-log-item"]',
+    '[data-name="alert-log-item"]',
+    '[data-name="alert-item"]',
+    '[data-role="alert-item"]',
+    '[data-qa-id*="alert-item"]',
+    '[data-name*="alert-row"]',
+    '[data-name*="log-item"]',
+    '[class*="alertItem"]',
+    '[class*="alert-row"]',
+    '[class*="itemRow"]',
+    '[class*="itemRow"][class*="alert"]',
   ];
 
   for (const sel of deleteBtnSelectors) {
@@ -788,6 +789,39 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     await page.waitForTimeout(500);
 
     // 対象の行を再度取得
+    const row = page.locator(
+      `[data-qa-id="menu-inner"] :is([class*="item-"], [role="menuitem"], [data-role="list-item"], div):has-text("${target.name}")`
+    ).first();
+    await row.waitFor({ state: "visible", timeout: 10000 });
+
+    // ホバーして削除ボタンを表示
+    await row.hover();
+    await page.waitForTimeout(500);
+
+    let deleteBtn = await findVisibleDeleteButtonWithin(row);
+    if (!deleteBtn) {
+      const box = await row.boundingBox().catch(() => null);
+      if (box) {
+        // 右端に出るホバーゴミ箱を直接クリック（UI変更対策）
+        await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2).catch(() => {});
+        await page.waitForTimeout(400);
+        deleteBtn = await findVisibleDeleteButtonWithin(row);
+      }
+    }
+
+    if (!deleteBtn) {
+      console.log(`[delete] 削除ボタンが見つからないため、右クリックメニューを使用: ${target.name}`);
+      await row.click({ button: "right", force: true });
+      await page.waitForTimeout(500);
+      const delMenuItem = page.locator('[role="menuitem"]:has-text("削除"), [role="menuitem"]:has-text("Delete")').first();
+      if (await delMenuItem.isVisible().catch(() => false)) {
+        await delMenuItem.click({ force: true });
+      } else {
+        throw new Error(`削除ボタンも右クリックメニューも使えません: ${target.name}`);
+      }
+    } else {
+      await deleteBtn.click({ force: true });
+    }
 
     await page.waitForTimeout(500);
     await confirmTradingViewDialog(page);
@@ -1152,12 +1186,16 @@ async function getAllAlertTickerTexts(page) {
 
 async function getVisibleAlertRows(page) {
   const rowSelectors = [
-
+    '[data-name="alerts-log-item"]',
+    '[data-name="alert-log-item"]',
     '[data-name="alert-item"]',
     '[data-role="alert-item"]',
     '[data-qa-id*="alert-item"]',
     '[data-name*="alert-row"]',
-
+    '[data-name*="log-item"]',
+    '[class*="alertItem"]',
+    '[class*="alert-row"]',
+    '[class*="itemRow"]',
     '[class*="itemRow"][class*="alert"]',
   ];
 
