@@ -810,45 +810,58 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
 
     // ホバーして削除ボタンを表示
     await row.hover();
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(800);
 
-    let deleteBtn = await findVisibleDeleteButtonWithin(row, page);
-    if (!deleteBtn) {
-      const box = await row.boundingBox().catch(() => null);
-      if (box) {
-        // 右端に出るホバーゴミ箱を直接クリック（UI変更対策）
-        await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2).catch(() => { });
-        await page.waitForTimeout(400);
-        deleteBtn = await findVisibleDeleteButtonWithin(row, page);
+    // デバッグ用: 行内のボタン類をダンプ
+    const rowHandle = await row.elementHandle().catch(() => null);
+    if (rowHandle) {
+      const rowDump = await page.evaluate((el) => {
+        const btns = Array.from(el.querySelectorAll('button, [role="button"], svg, div[class*="icon"], div[class*="button"]'));
+        return btns.map(b => {
+          const cls = typeof b.className === 'string' ? b.className : String(b.getAttribute('class') || '');
+          return {
+            tag: b.tagName,
+            className: cls,
+            ariaLabel: b.getAttribute('aria-label'),
+            dataName: b.getAttribute('data-name'),
+            text: b.textContent.trim()
+          };
+        }).filter(x => x.ariaLabel || x.dataName || x.text || x.className.includes('icon') || x.className.includes('remove') || x.className.includes('close') || x.className.includes('delete') || x.className.includes('button'));
+      }, rowHandle);
+      console.log(`🛠️ [デバッグ] ウォッチリスト行内のアイコン類 (${target.name}):`, JSON.stringify(rowDump, null, 2));
+    }
+
+    let deleteBtn = await findVisibleDeleteButtonWithin(row);
+
+    // Evaluateによる強制削除試行（UIが特殊な場合への対処）
+    if (!deleteBtn && rowHandle) {
+      const clicked = await page.evaluate((el) => {
+        const items = Array.from(el.querySelectorAll('[data-name*="remove"], [data-name*="delete"], [class*="remove"], [class*="delete"]'));
+        const target = items[0];
+        if (target && typeof target.click === 'function') {
+          target.click();
+          return true;
+        }
+        return false;
+      }, rowHandle);
+
+      if (clicked) {
+        console.log(`[delete] Evaluateで削除ボタンを強制クリックしました: ${target.name}`);
+        // クリックできたらdeleteBtnのダミーを入れる
+        deleteBtn = true;
       }
     }
 
     if (!deleteBtn) {
-      console.log(`[delete] 削除ボタンが見つからないため、右クリックメニューを使用: ${target.name}`);
-      await row.click({ button: "right", force: true });
-      await page.waitForTimeout(500);
-      const delMenuItem = page.locator([
-        '[role="menuitem"]:has-text("削除")',
-        '[role="menuitem"]:has-text("Delete")',
-        '[role="menuitem"]:has-text("Remove")',
-        '[data-role="menuitem"]:has-text("削除")',
-        '[data-role="menuitem"]:has-text("Delete")',
-        '[data-role="menuitem"]:has-text("Remove")',
-        'div[class*="item"]:has-text("削除")',
-        'div[class*="item"]:has-text("Delete")',
-        'div[class*="item"]:has-text("Remove")'
-      ].join(', ')).first();
-
-      if (await delMenuItem.isVisible().catch(() => false)) {
-        console.log(`[delete] 右クリックメニューから削除を実行します: ${target.name}`);
-        await delMenuItem.click({ force: true });
-      } else {
-        throw new Error(`削除ボタンも右クリックメニューも使えません: ${target.name}`);
-      }
-    } else {
+      console.log(`❌ [delete] 削除ボタンが見つかりません。Deleteキーを試行します: ${target.name}`);
+      await row.click().catch(() => {});
+      await page.waitForTimeout(300);
+      await page.keyboard.press('Delete').catch(() => {});
+    } else if (deleteBtn !== true) {
       console.log(`[delete] 削除ボタンを直接クリックしました: ${target.name}`);
-      await deleteBtn.click({ force: true });
+      await deleteBtn.click({ force: true }).catch(() => {});
     }
+
 
     await page.waitForTimeout(500);
     await confirmTradingViewDialog(page);
