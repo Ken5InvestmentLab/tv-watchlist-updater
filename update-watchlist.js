@@ -146,8 +146,6 @@ async function findVisibleDeleteButtonWithin(scope) {
   ];
 
   for (const sel of deleteBtnSelectors) {
-    const btn = scope.locator(sel).first();
-    if (await btn.isVisible().catch(() => false)) return btn;
   }
 
   return null;
@@ -1247,6 +1245,7 @@ async function getAlertActionRow(row) {
   return row;
 }
 
+
 async function getAlertTickerFromRow(row) {
   const directTicker = row.locator('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]').first();
   if (await directTicker.isVisible().catch(() => false)) {
@@ -1325,7 +1324,6 @@ async function deleteManagedAlerts(page, prefixes) {
     }
 
     if (!deletedByTrash) {
-
       await actionRow.click({ force: true, timeout: 8000 }).catch(() => {});
       await page.waitForTimeout(250);
       await page.keyboard.press("Delete").catch(() => {});
@@ -1341,8 +1339,6 @@ async function deleteManagedAlerts(page, prefixes) {
       await page.waitForTimeout(500);
 
 
-
-      if (!ok) {
         await safeScreenshot(page, `alert_delete_menu_not_found_${Date.now()}`);
         throw new Error(`アラート削除メニューが見つかりませんでした: ${targetText}`);
       }
@@ -2198,6 +2194,11 @@ async function getAlertDialogRoot(page) {
 
 async function ensureAlertTargetList(page, listName) {
   const dialog = await getAlertDialogRoot(page);
+  if (!dialog) {
+    await safeScreenshot(page, `alert_dialog_missing_for_target_${listName}`);
+    throw new Error(`アラート対象リスト確認時にダイアログが見つかりませんでした: ${listName}`);
+  }
+
   const dialogText = ((await dialog.textContent().catch(() => "")) || "").replace(/\s+/g, " ");
 
   if (dialogText.includes(listName)) {
