@@ -1310,78 +1310,59 @@ async function deleteManagedAlerts(page, prefixes) {
     await actionRow.hover().catch(() => {});
     await page.waitForTimeout(400);
 
-    let deletedByTrash = false;
-const trashBtn = await findVisibleDeleteButtonWithin(actionRow, page);
-if (trashBtn) {
-  const clicked = await clickBestEffort(trashBtn, 8000);
-
-  if (clicked) {
-    // ★ ここ追加（削除確認）
-    await page.waitForTimeout(800);
-
-    const stillExists = await actionRow.isVisible().catch(() => false);
-
-    if (stillExists) {
-      console.log("❌ 削除失敗（まだ残ってる）:", targetText);
-      deletedByTrash = false; // ← 重要（失敗扱いに戻す）
-    } else {
-      console.log("✅ 削除成功:", targetText);
-      deletedByTrash = true;
-    }
-  }
-}
-
-    if (!deletedByTrash) {
-      const box = await actionRow.boundingBox().catch(() => null);
-      if (box) {
-        await page.mouse.move(box.x + Math.max(box.width - 12, 1), box.y + box.height / 2).catch(() => {});
-        await page.waitForTimeout(250);
-        await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2).catch(() => {});
-        await page.waitForTimeout(500);
-        const confirmDirect = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
-        if (await confirmDirect.isVisible().catch(() => false)) {
-          deletedByTrash = true;
-        }
-      }
-    }
-
-    if (!deletedByTrash) {
-      await actionRow.click({ force: true, timeout: 8000 }).catch(() => {});
-      await page.waitForTimeout(250);
-      await page.keyboard.press("Delete").catch(() => {});
-      await page.waitForTimeout(500);
-      const confirmByKey = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
-      if (await confirmByKey.isVisible().catch(() => false)) {
-        deletedByTrash = true;
-      }
-    }
-
-    if (!deletedByTrash) {
-      await actionRow.click({ button: "right", force: true, timeout: 8000 }).catch(() => {});
-      await page.waitForTimeout(500);
-        await safeScreenshot(page, `alert_delete_menu_not_found_${Date.now()}`);
-        throw new Error(`アラート削除メニューが見つかりませんでした: ${targetText}`);
-    }
-
-    // 確認ダイアログが出る場合はクリック（出ない場合はスキップ）
-    const confirm = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
-    if (await confirm.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await safeClick(confirm, { timeout: 5000, force: true });
-    }
-
     let deleted = false;
+
+    // ----- ゴミ箱ボタンを探してクリック -----
+    const trashBtn = await findVisibleDeleteButtonWithin(actionRow, page);
+    if (trashBtn) {
+      const clicked = await clickBestEffort(trashBtn, 8000);
+      if (clicked) {
+        // 確認ダイアログが表示される場合があるので待機・処理
+        await page.waitForTimeout(800);
+        await confirmTradingViewDialog(page);  // ★ 追加
+      }
+    }
+
+    // ゴミ箱クリックで削除できたか確認（最大10秒待つ）
     for (let i = 0; i < 10; i++) {
-      await page.waitForTimeout(800);
-      const texts = await getManagedAlertTickerTexts(page, prefixes);
-      if (!texts.includes(targetText)) {
+      await page.waitForTimeout(1000);
+      const remain = await getManagedAlertTickerTexts(page, prefixes);
+      if (!remain.includes(targetText)) {
         deleted = true;
+        console.log("✅ 削除成功:", targetText);
         break;
       }
     }
 
+    // まだ削除されていなければ右クリックメニューを試す
     if (!deleted) {
-      await safeScreenshot(page, `alert_delete_not_reflected_${Date.now()}`);
-      throw new Error(`アラート削除後も項目が残っています: ${targetText}`);
+      console.log("ゴミ箱での削除に失敗、右クリックメニューを試行:", targetText);
+      await actionRow.click({ button: "right", force: true, timeout: 8000 }).catch(() => {});
+      await page.waitForTimeout(800);
+
+      const deleteMenuItem = page.locator('[role="menuitem"]:has-text("削除"), [role="menuitem"]:has-text("Delete")').first();
+      if (await deleteMenuItem.isVisible().catch(() => false)) {
+        await deleteMenuItem.click({ force: true });
+        await page.waitForTimeout(800);
+        await confirmTradingViewDialog(page);
+      }
+
+      // 再度削除確認
+      for (let i = 0; i < 10; i++) {
+        await page.waitForTimeout(1000);
+        const remain = await getManagedAlertTickerTexts(page, prefixes);
+        if (!remain.includes(targetText)) {
+          deleted = true;
+          console.log("✅ 右クリックで削除成功:", targetText);
+          break;
+        }
+      }
+    }
+
+    // どうしても削除できなければエラー
+    if (!deleted) {
+      await safeScreenshot(page, `alert_delete_failed_${Date.now()}`);
+      throw new Error(`アラート削除に失敗しました: ${targetText}`);
     }
   }
 
