@@ -142,8 +142,7 @@ async function findVisibleDeleteButtonWithin(scope) {
     'button[class*="remove"]',
     'button[class*="delete"]',
     'button:has([data-name*="trash"])',
-    'button:has([class*="trash"])',
- main
+    'button:has([class*="trash"])'
   ];
 
   for (const sel of deleteBtnSelectors) {
@@ -151,7 +150,6 @@ async function findVisibleDeleteButtonWithin(scope) {
     if (await btn.isVisible().catch(() => false)) return btn;
   }
 
- main
   return null;
 }
 
@@ -792,13 +790,10 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
 
     // 対象の行を再度取得
     const row = page.locator(
- main
 
 // ホバーして削除ボタンを表示
 await row.hover();
 await page.waitForTimeout(500);
-
- main
 
 if (!deleteBtn) {
   console.log(`[delete] 削除ボタンが見つからないため、右クリックメニューを使用: ${target.name}`);
@@ -1281,7 +1276,7 @@ async function deleteManagedAlerts(page, prefixes) {
     }
 
     if (!deletedByTrash) {
-main
+
       await targetRow.click({ button: "right", force: true, timeout: 8000 }).catch(() => {});
       await page.waitForTimeout(500);
 
