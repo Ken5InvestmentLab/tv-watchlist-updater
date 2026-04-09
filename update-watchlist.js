@@ -1290,7 +1290,7 @@ async function deleteManagedAlerts(page, prefixes) {
     const targetText = currentAlerts[0];
     console.log(`Deleting alert: ${targetText}`);
 
-    // 対象行を取得（再検索）
+    // 対象行を再取得
     const rows = await getVisibleAlertRows(page);
     let targetRow = null;
     for (const row of rows) {
@@ -1309,31 +1309,29 @@ async function deleteManagedAlerts(page, prefixes) {
     const actionRow = await getAlertActionRow(targetRow);
     await actionRow.scrollIntoViewIfNeeded().catch(() => {});
     await actionRow.hover().catch(() => {});
-    
-    // ゴミ箱ボタンが現れるまで最大2秒待つ
-    await page.waitForTimeout(800);
-    
+    await page.waitForTimeout(1000); // ホバーアニメーション完了を待つ
+
     let deleted = false;
 
-    // ----- 方法1: ホバーで現れるゴミ箱ボタンを確実に掴む -----
+    // -----------------------------
+    // 1. ホバー時に現れるゴミ箱ボタンを探す
+    // -----------------------------
+    // 実際の TradingView では data-role や aria-label が付与される
     const trashSelectors = [
+      'button[data-role="remove"]',
+      'button[data-name="remove-button"]',
       'button[aria-label="Delete alert"]',
       'button[aria-label="Delete"]',
       'button[aria-label="削除"]',
-      'button[data-name="alert-remove-button"]',
-      'button[data-name="remove-button"]',
       'button[data-qa-id="remove-button"]',
-      'button[class*="deleteButton"]',
-      'button[class*="removeButton"]',
-      'button[class*="trash"]',
-      'button:has(svg[class*="trash"])',
       'button:has(svg[class*="delete"])',
+      'button:has(svg[class*="trash"])',
     ];
 
     let trashBtn = null;
     for (const sel of trashSelectors) {
       const btn = actionRow.locator(sel).first();
-      // 表示されるまで少し待つ
+      // 表示を最大1秒待つ
       await btn.waitFor({ state: 'visible', timeout: 1000 }).catch(() => {});
       if (await btn.isVisible().catch(() => false)) {
         trashBtn = btn;
@@ -1342,44 +1340,56 @@ async function deleteManagedAlerts(page, prefixes) {
     }
 
     if (trashBtn) {
-      console.log("✅ Found trash button, clicking...");
+      console.log("✅ ゴミ箱ボタンを発見、クリックします");
       await trashBtn.click({ force: true, timeout: 5000 });
-      await page.waitForTimeout(1000);
-      
-      // 将来確認ダイアログが出る場合に備える（現状は何もしない）
-      await confirmTradingViewDialog(page);
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(1500);
+      await confirmTradingViewDialog(page); // 将来の確認ダイアログ対策
     } else {
-      console.log("⚠️ Trash button not found, falling back to right-click menu...");
-      
-      // ----- 方法2: 右クリックメニュー -----
+      console.log("⚠️ ゴミ箱ボタンが見つかりません。右クリックメニューを試します");
+
+      // -----------------------------
+      // 2. 右クリック → メニューから「削除」
+      // -----------------------------
       await actionRow.click({ button: "right", force: true });
-      await page.waitForTimeout(800);
-      
-      // コンテキストメニュー内の「削除」を探す
-      const deleteMenuItem = page.locator('[role="menu"] [role="menuitem"]:has-text("Delete"), [role="menu"] [role="menuitem"]:has-text("削除")').first();
-      if (await deleteMenuItem.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await deleteMenuItem.click({ force: true });
-        await page.waitForTimeout(1000);
-        await confirmTradingViewDialog(page); // 将来用
-        await page.waitForTimeout(1000);
+      await page.waitForTimeout(1000); // メニュー表示を待つ
+
+      // メニューコンテナを探す（data-role / role の両方に対応）
+      const menuContainer = page.locator('[data-role="menu"], [role="menu"]').first();
+      await menuContainer.waitFor({ state: 'visible', timeout: 3000 }).catch(() => {});
+
+      // 「削除」項目を取得 (data-role="menuitem" の tr も含む)
+      const deleteItem = menuContainer
+        .locator('[data-role="menuitem"], [role="menuitem"]')
+        .filter({ hasText: /削除|Delete/i })
+        .first();
+
+      if (await deleteItem.isVisible().catch(() => false)) {
+        console.log("✅ 右クリックメニュー内の「削除」をクリックします");
+        await deleteItem.click({ force: true, timeout: 5000 });
+        await page.waitForTimeout(1500);
+        await confirmTradingViewDialog(page);
       } else {
-        console.log("❌ Delete option not found in context menu.");
+        console.log("❌ 右クリックメニューに「削除」が見つかりません");
+        // デバッグ用にメニュー全体のテキストを出力
+        const menuText = await menuContainer.textContent().catch(() => '');
+        console.log("メニュー内容:", menuText.slice(0, 200));
       }
     }
 
-    // 削除確認ループ（最大15秒）
+    // -----------------------------
+    // 削除完了を待機（最大15秒）
+    // -----------------------------
     for (let i = 0; i < 15; i++) {
       const remaining = await getManagedAlertTickerTexts(page, prefixes);
       if (!remaining.includes(targetText)) {
         deleted = true;
-        console.log(`🎉 Alert successfully deleted: ${targetText}`);
+        console.log(`🎉 削除成功: ${targetText}`);
         break;
       }
-      // リストの再描画を促すため軽くスクロール
+      // 再描画を促すため、軽くスクロール
       if (i % 3 === 0) {
-        await page.mouse.wheel(0, 100);
-        await page.waitForTimeout(200);
+        await page.mouse.wheel(0, 150);
+        await page.waitForTimeout(300);
       }
       await page.waitForTimeout(1000);
     }
@@ -1392,7 +1402,6 @@ async function deleteManagedAlerts(page, prefixes) {
 
   throw new Error("アラート削除ループが上限に達しました");
 }
-
 async function openWatchlistMenuHard(page, retryCount = 8) {
   const buttonSelector = 'button[data-name="watchlists-button"]';
   // 提供いただいたHTMLから判明した「正解のメニューセレクタ」
