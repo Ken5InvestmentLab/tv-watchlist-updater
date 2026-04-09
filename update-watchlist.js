@@ -1322,55 +1322,6 @@ async function deleteManagedAlerts(page, prefixes) {
   throw new Error("アラート削除ループが上限に達しました");
 }
 
-    if (!targetRow) {
-      console.log("No more managed alerts.");
-      return;
-    }
-
-    console.log("Deleting alert:", targetText);
-
-
-      await page.waitForTimeout(500);
-
-      const del = page
-        .locator('[role="menuitem"], tr[data-role="menuitem"], [data-role="menuitem"]')
-        .filter({ hasText: /^削除$|^Delete$/i })
-        .first();
-      const ok = await safeClick(del, { timeout: 8000, force: true });
-
-      if (!ok) {
-        await safeScreenshot(page, `alert_delete_menu_not_found_${Date.now()}`);
-        throw new Error(`アラート削除メニューが見つかりませんでした: ${targetText}`);
-      }
-    }
-
-    const confirm = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
-    const confirmOk = await safeClick(confirm, { timeout: 8000, force: true });
-
-    if (!confirmOk) {
-      await safeScreenshot(page, `alert_delete_confirm_not_found_${Date.now()}`);
-      throw new Error(`アラート削除確認ボタンが押せませんでした: ${targetText}`);
-    }
-
-    let deleted = false;
-    for (let i = 0; i < 10; i++) {
-      await page.waitForTimeout(800);
-      const texts = await getManagedAlertTickerTexts(page, prefixes);
-      if (!texts.includes(targetText)) {
-        deleted = true;
-        break;
-      }
-    }
-
-    if (!deleted) {
-      await safeScreenshot(page, `alert_delete_not_reflected_${Date.now()}`);
-      throw new Error(`アラート削除後も項目が残っています: ${targetText}`);
-    }
-  }
-
-  throw new Error("アラート削除ループが上限に達しました");
-}
-
 async function openWatchlistMenuHard(page, retryCount = 8) {
   const buttonSelector = 'button[data-name="watchlists-button"]';
   // 提供いただいたHTMLから判明した「正解のメニューセレクタ」
