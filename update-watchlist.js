@@ -1213,6 +1213,11 @@ async function getVisibleAlertRows(page) {
     if (!count) continue;
 
     const visible = [];
+    for (let i = 0; i < count; i++) {
+      const row = rows.nth(i);
+      if (await row.isVisible().catch(() => false)) visible.push(row);
+    }
+    if (visible.length > 0) return visible;
   }
 
   const tickerItems = page.locator('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]');
@@ -1333,10 +1338,8 @@ async function deleteManagedAlerts(page, prefixes) {
     if (!deletedByTrash) {
       await actionRow.click({ button: "right", force: true, timeout: 8000 }).catch(() => {});
       await page.waitForTimeout(500);
-
         await safeScreenshot(page, `alert_delete_menu_not_found_${Date.now()}`);
         throw new Error(`アラート削除メニューが見つかりませんでした: ${targetText}`);
-      }
     }
 
     const confirm = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
