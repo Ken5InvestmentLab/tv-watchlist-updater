@@ -799,9 +799,6 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
   console.log(`[delete] "${prefix}" の削除完了`);
 }
 
-/**
- * TradingViewの確認ダイアログ（「本当に削除しますか？」等）を確実に承認する関数
- */
 async function confirmTradingViewDialog(page) {
   console.log("[dialog] 確認ダイアログを待機中...");
 
@@ -1285,10 +1282,6 @@ async function deleteManagedAlerts(page, prefixes) {
   throw new Error("アラート削除ループが上限に達しました");
 }
 
-/**
- * ウォッチリストのドロップダウンメニューを確実に開く関数
- * テキストベースの判定、属性指定、強制クリックを組み合わせています。
- */
 async function openWatchlistMenuHard(page, retryCount = 8) {
   const buttonSelector = 'button[data-name="watchlists-button"]';
   // 提供いただいたHTMLから判明した「正解のメニューセレクタ」
