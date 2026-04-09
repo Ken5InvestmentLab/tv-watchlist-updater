@@ -132,17 +132,17 @@ async function firstVisible(locator, max = 30) {
 
 async function findVisibleDeleteButtonWithin(scope) {
   const deleteBtnSelectors = [
-    '[data-name="alerts-log-item"]',
-    '[data-name="alert-log-item"]',
-    '[data-name="alert-item"]',
-    '[data-role="alert-item"]',
-    '[data-qa-id*="alert-item"]',
-    '[data-name*="alert-row"]',
-    '[data-name*="log-item"]',
-    '[class*="alertItem"]',
-    '[class*="alert-row"]',
-    '[class*="itemRow"]',
-    '[class*="itemRow"][class*="alert"]',
+    'button[data-name="remove-button"]',
+    'button[data-name="delete-button"]',
+    'button[data-qa-id="remove-button"]',
+    '[data-qa-id="remove-button"]',
+    'button[aria-label*="削除"]',
+    'button[aria-label*="Delete"]',
+    'button[aria-label*="Remove"]',
+    'button[class*="remove"]',
+    'button[class*="delete"]',
+    'button:has([data-name*="trash"])',
+    'button:has([class*="trash"])',
   ];
 
   for (const sel of deleteBtnSelectors) {
