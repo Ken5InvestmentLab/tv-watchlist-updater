@@ -104,7 +104,7 @@ async function safeClick(locator, options = {}) {
   try {
     const el = locator.first();
     await el.waitFor({ state: "visible", timeout: options.timeout || STEP_TIMEOUT });
-    await el.scrollIntoViewIfNeeded().catch(() => {});
+    await el.scrollIntoViewIfNeeded().catch(() => { });
     await el.click(options);
     return true;
   } catch {
@@ -349,7 +349,7 @@ async function isWatchlistPanelReady(page) {
     const pressed = await btn.getAttribute('aria-pressed');
     if (pressed === 'true') return true;
   }
-  
+
   // 方法2: パネル内の実際の要素
   const panelIndicators = [
     'div[data-role="list"]',               // リストコンテナ
@@ -357,32 +357,32 @@ async function isWatchlistPanelReady(page) {
     '[role="tabpanel"]',
     'div[class*="watchlist"]',
   ];
-  
+
   for (const sel of panelIndicators) {
     if (await page.locator(sel).first().isVisible().catch(() => false)) {
       return true;
     }
   }
-  
+
   return false;
 }
 
 // ウォッチリストパネルを開く（閉じている場合のみ）
 async function openWatchlistPanel(page) {
   if (await isWatchlistPanelReady(page)) return;
-  
+
   const btn = await getWatchlistButton(page);
   if (!btn) {
     await safeScreenshot(page, "watchlist_button_not_found");
     throw new Error("ウォッチリストボタンが見つかりません");
   }
-  
+
   // クリック前の状態
   const beforePressed = await btn.getAttribute('aria-pressed');
-  
+
   await btn.click({ force: true });
   await page.waitForTimeout(500);
-  
+
   // aria-pressed が 'true' になるのを待機（最大5秒）
   try {
     await page.waitForFunction(
@@ -396,7 +396,7 @@ async function openWatchlistPanel(page) {
       throw new Error("ウォッチリストパネルが開きませんでした");
     }
   }
-  
+
   await page.waitForTimeout(800);
 }
 
@@ -404,18 +404,18 @@ async function ensureWatchlistPanelOpen(page) {
   for (let attempt = 0; attempt < 3; attempt++) {
     await handleUnexpectedDialogs(page);
     if (await isWatchlistPanelReady(page)) return;
-    
+
     // 余計なメニューを閉じてからリトライ
     await page.keyboard.press('Escape');
     await page.waitForTimeout(500);
-    
+
     await openWatchlistPanel(page);
-    
+
     if (await isWatchlistPanelReady(page)) return;
-    
+
     console.log(`パネルオープンリトライ ${attempt + 1}/3`);
   }
-  
+
   await safeScreenshot(page, "watchlist_panel_not_open");
   throw new Error("ウォッチリストパネルを開けませんでした");
 }
@@ -428,7 +428,7 @@ async function waitForTradingViewReady(page) {
     '[data-name="chart"]',
     'canvas',
   ];
-  
+
   let found = false;
   for (const sel of selectors) {
     if (await page.locator(sel).first().isVisible({ timeout: 5000 }).catch(() => false)) {
@@ -436,32 +436,32 @@ async function waitForTradingViewReady(page) {
       break;
     }
   }
-  
+
   if (!found) {
     await safeScreenshot(page, "tradingview_not_ready");
     throw new Error("TradingViewのUIが読み込まれませんでした");
   }
-  
+
   // ウォッチリストボタンが表示されるのを待つ
   const btn = await getWatchlistButton(page);
   if (!btn) {
     await safeScreenshot(page, "watchlist_button_missing");
     throw new Error("ウォッチリストボタンが見つかりません（タイムアウト）");
   }
-  
+
   await page.waitForTimeout(2000);
 }
 
 async function clickBestEffort(locator, timeout = 8000) {
   try {
-    await locator.scrollIntoViewIfNeeded().catch(() => {});
+    await locator.scrollIntoViewIfNeeded().catch(() => { });
     await locator.click({ force: true, timeout });
     return true;
-  } catch {}
+  } catch { }
   try {
     await locator.dispatchEvent('click');
     return true;
-  } catch {}
+  } catch { }
   try {
     // ネイティブな mousedown + mouseup を発火
     await locator.evaluate(el => {
@@ -472,14 +472,14 @@ async function clickBestEffort(locator, timeout = 8000) {
       el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
     });
     return true;
-  } catch {}
+  } catch { }
   return false;
 }
 
 async function closeAnyMenu(page) {
-  await page.keyboard.press("Escape").catch(() => {});
+  await page.keyboard.press("Escape").catch(() => { });
   await page.waitForTimeout(200);
-  await page.keyboard.press("Escape").catch(() => {});
+  await page.keyboard.press("Escape").catch(() => { });
   await page.waitForTimeout(250);
 }
 
@@ -596,14 +596,14 @@ async function openListOpenDialog(page) {
         break;
       }
     }
-    
+
     if (clicked) {
       await page.waitForTimeout(1500);
       // ダイアログまたは新しいリスト一覧が表示されるのを待つ
       const listVisible = await directListItems.first().isVisible({ timeout: 5000 }).catch(() => false);
       if (listVisible) return;
     }
-    
+
     await closeAnyMenu(page);
     await page.waitForTimeout(1000);
   }
@@ -647,7 +647,7 @@ async function switchWatchlistTo(page, listName) {
   console.log("Switching watchlist to:", listName);
 
   await handleUnexpectedDialogs(page);
-  
+
   // 既に目的のリストか確認
   const current = await getCurrentWatchlistTitle(page);
   if (current === listName) {
@@ -665,7 +665,7 @@ async function switchWatchlistTo(page, listName) {
     `[data-qa-id="menu-inner"] [class*="item-"]:has-text("${listName}")`,
     `div[data-role="list-item"]:has-text("${listName}")`
   ];
-  
+
   let row = null;
   for (const sel of selectors) {
     const r = page.locator(sel).first();
@@ -674,7 +674,7 @@ async function switchWatchlistTo(page, listName) {
       break;
     }
   }
-  
+
   if (!row) {
     await safeScreenshot(page, `watchlist_not_found_in_list_${listName}`);
     throw new Error(`リスト一覧に "${listName}" が見つかりません`);
@@ -683,7 +683,7 @@ async function switchWatchlistTo(page, listName) {
   await row.click({ force: true, timeout: 8000 });
 
   // ダイアログやメニューを閉じる
-  await closeOpenListDialogIfVisible(page).catch(() => {});
+  await closeOpenListDialogIfVisible(page).catch(() => { });
   await closeAnyMenu(page);
   await page.waitForTimeout(1500);
 
@@ -719,7 +719,7 @@ async function assertWatchlistExists(page, listName) {
     await page.waitForTimeout(800);
   }
 
-  await closeOpenListDialogIfVisible(page).catch(() => {});
+  await closeOpenListDialogIfVisible(page).catch(() => { });
   await closeAnyMenu(page);
 
   if (!found) {
@@ -774,7 +774,7 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
         targets.push({ element: listItems.nth(i), name: text.trim() });
       }
     }
-    
+
     if (targets.length > 0) break;
     console.log(`[delete] 対象が見つかりませんでした。リトライ ${retry + 1}/3`);
     await closeAnyMenu(page);
@@ -810,7 +810,7 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
       const box = await row.boundingBox().catch(() => null);
       if (box) {
         // 右端に出るホバーゴミ箱を直接クリック（UI変更対策）
-        await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2).catch(() => {});
+        await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2).catch(() => { });
         await page.waitForTimeout(400);
         deleteBtn = await findVisibleDeleteButtonWithin(row, page);
       }
@@ -853,17 +853,17 @@ async function confirmTradingViewDialog(page) {
       break;
     }
   }
-  
+
   if (!dialog) {
     console.log("[dialog] 確認ダイアログが見つかりませんでした（既に閉じているか不要）");
     return;
   }
 
   // 確認ボタン
-  const confirmBtn = dialog.locator('button').filter({ 
-    hasText: /^(削除|Delete|はい|Yes|OK|Yes, delete)$/i 
+  const confirmBtn = dialog.locator('button').filter({
+    hasText: /^(削除|Delete|はい|Yes|OK|Yes, delete)$/i
   }).first();
-  
+
   if (await confirmBtn.isVisible().catch(() => false)) {
     await confirmBtn.click({ force: true });
     console.log("[dialog] 削除を承認しました。");
@@ -878,7 +878,7 @@ async function confirmTradingViewDialog(page) {
       await page.keyboard.press("Escape");
     }
   }
-  
+
   await page.waitForTimeout(500);
 }
 
@@ -903,7 +903,7 @@ async function importWatchlistFromFile(page, filePath, desiredName) {
   console.log("File exists:", fs.existsSync(uploadPath));
   console.log("File size:", fs.statSync(uploadPath).size);
 
-  await closeOpenListDialogIfVisible(page).catch(() => {});
+  await closeOpenListDialogIfVisible(page).catch(() => { });
   await closeAnyMenu(page);
   await page.waitForTimeout(400);
 
@@ -1040,7 +1040,7 @@ async function closeCreateAlertDialogIfVisible(page) {
     return true;
   }
 
-  await page.keyboard.press("Escape").catch(() => {});
+  await page.keyboard.press("Escape").catch(() => { });
   await page.waitForTimeout(600);
   return true;
 }
@@ -1129,7 +1129,7 @@ async function openAlertsPanel(page) {
     if (attempt === 2) {
       console.log("alerts panel still not opening. refreshing page once...");
       await page.reload({ waitUntil: "domcontentloaded" });
-      await page.waitForLoadState("networkidle").catch(() => {});
+      await page.waitForLoadState("networkidle").catch(() => { });
       await page.waitForTimeout(4000);
     } else {
       await page.waitForTimeout(1000);
@@ -1356,13 +1356,28 @@ async function deleteManagedAlerts(page, prefixes) {
     } else {
       console.log("⚠️ 削除ボタンが見つからないため、右クリックメニューを強制表示します");
 
+      // 行のホバーを強制して、中のDOM要素（ボタン等）をデバッグ出力する
+      await targetRow.hover({ force: true });
+      await page.waitForTimeout(500);
+      const rowDump = await page.evaluate((row) => {
+        const btns = Array.from(row.querySelectorAll('button, [role="button"], svg, div[class*="icon"], div[class*="button"]'));
+        return btns.map(b => ({
+          tag: b.tagName,
+          className: b.className,
+          ariaLabel: b.getAttribute('aria-label'),
+          dataName: b.getAttribute('data-name'),
+          text: b.textContent.trim()
+        })).filter(x => x.ariaLabel || x.dataName || x.text || (x.className && x.className.includes('icon')));
+      }, rowHandle);
+      console.log("🛠️ [デバッグ] 行内のアイコン類:", JSON.stringify(rowDump, null, 2));
+
       // 2. 右クリックメニューを強制表示（座標指定）
       const box = await targetRow.boundingBox();
       if (box) {
         await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: 'right' });
         await page.waitForTimeout(800);
 
-        // メニュー内の削除項目を探す（より柔軟に）
+        // 新しいLocatorでの削除項目探し
         const delMenuItem = page.locator([
           '[role="menuitem"]:has-text("削除")',
           '[role="menuitem"]:has-text("Delete")',
@@ -1382,13 +1397,25 @@ async function deleteManagedAlerts(page, prefixes) {
           menuDeleted = true;
           console.log("✅ 右クリックメニューから削除しました (Playwright)");
         } else {
+          // Playwrightでダメなら現状のメニュー画面をデバッグ出力
+          const menuDump = await page.evaluate(() => {
+            const allItems = Array.from(document.querySelectorAll('[role="menuitem"], [data-role="menuitem"], div[class*="menu"] div[class*="item"]'));
+            return allItems.map(m => ({
+              text: m.textContent.trim(),
+              className: m.className,
+              dataName: m.getAttribute("data-name"),
+              html: m.innerHTML
+            }));
+          });
+          console.log("🛠️ [デバッグ] メニュー項目ダンプ:", JSON.stringify(menuDump, null, 2));
+
           menuDeleted = await page.evaluate(() => {
             const menu = document.querySelector('[data-role="menu"], [role="menu"]');
             const items = menu 
               ? Array.from(menu.querySelectorAll('[data-role="menuitem"], [role="menuitem"]'))
               : Array.from(document.querySelectorAll('[role="menuitem"], [data-role="menuitem"], div[class*="menu"] div[class*="item"]'));
             
-            const deleteItem = items.find(el => /削除|Delete|Remove/i.test(el.textContent || ''));
+            const deleteItem = items.find(el => /削除|Delete|Remove|Stop|停止|x/i.test(el.textContent || '') || (el.getAttribute('data-name')||'').includes('remove'));
             if (deleteItem && typeof deleteItem.click === 'function') {
               deleteItem.click();
               return true;
@@ -1464,18 +1491,18 @@ async function openWatchlistMenuHard(page, retryCount = 8) {
         await page.waitForSelector(menuSelector, { state: 'visible', timeout: 2500 });
         // 中身（menu-inner）もしっかり描画されるまで待機
         await page.waitForSelector(menuInnerSelector, { state: 'visible', timeout: 1000 });
-        
+
         console.log('[menu] メニューの出現を確定しました。');
         return true;
       } catch (e) {
         console.warn(`[menu] 通常クリックでメニューが確認できません。強制発火を試みます...`);
-        
+
         // 3. バックアップ：座標指定クリック（右端の矢印付近を狙う）
         const box = await button.boundingBox();
         if (box) {
           await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2);
         }
-        
+
         // 4. 最終手段：JavaScriptでの直接イベント発火
         await button.evaluate(el => {
           el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
@@ -1850,7 +1877,7 @@ async function fill4HInChangeIntervalDialog(page) {
   for (let i = 0; i < count; i++) {
     const inp = inputs.nth(i);
     if (!(await inp.isVisible().catch(() => false))) continue;
-    await inp.click({ force: true }).catch(() => {});
+    await inp.click({ force: true }).catch(() => { });
     await page.keyboard.press("Control+A");
     await inp.fill("240");
     await page.keyboard.press("Enter");
@@ -1940,7 +1967,7 @@ async function select4hFromMenu(page, menuRoot) {
   for (let r = 0; r < 10; r++) {
     await menuRoot.evaluate((el) => {
       el.scrollTop = (el.scrollTop || 0) + 240;
-    }).catch(() => {});
+    }).catch(() => { });
     await page.waitForTimeout(200);
 
     items = menuRoot.locator(scanSelectors);
@@ -2143,7 +2170,7 @@ async function clickAddAlertToList(page) {
       const visible = await item.isVisible().catch(() => false);
       if (!visible) continue;
 
-      await item.scrollIntoViewIfNeeded().catch(() => {});
+      await item.scrollIntoViewIfNeeded().catch(() => { });
       const ok = await clickBestEffort(item, 8000);
       if (ok) {
         await page.waitForTimeout(1200);
@@ -2579,7 +2606,7 @@ async function dumpAlertTickerTexts(page) {
 
     console.log("Opening TradingView...");
     await page.goto("https://www.tradingview.com/chart/", { waitUntil: "domcontentloaded" });
-    await page.waitForLoadState("networkidle").catch(() => {});
+    await page.waitForLoadState("networkidle").catch(() => { });
     await waitForTradingViewReady(page);  // 新しい関数を使用
 
     // ログイン状態確認（必要に応じて）
@@ -2635,7 +2662,7 @@ async function dumpAlertTickerTexts(page) {
         console.log("Skip alert ticker dump after create:", e?.message || e);
       }
     }
-    
+
     console.log("DONE.");
     await safeScreenshot(page, "done");
     await browser.close();
@@ -2645,7 +2672,7 @@ async function dumpAlertTickerTexts(page) {
       await debugDump(page, "final_error");
       await safeScreenshot(page, "failed");
     }
-    if (browser) await browser.close().catch(() => {});
+    if (browser) await browser.close().catch(() => { });
     process.exit(1);
   }
 })();
