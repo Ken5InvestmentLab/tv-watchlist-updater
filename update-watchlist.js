@@ -142,7 +142,6 @@ async function findVisibleDeleteButtonWithin(scope) {
     'button[class*="remove"]',
     'button[class*="delete"]',
     'button:has([data-name*="trash"])',
-    'button:has([class*="trash"])',
   ];
 
   for (const sel of deleteBtnSelectors) {
@@ -789,39 +788,6 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     await page.waitForTimeout(500);
 
     // 対象の行を再度取得
-    const row = page.locator(
-      `[data-qa-id="menu-inner"] :is([class*="item-"], [role="menuitem"], [data-role="list-item"], div):has-text("${target.name}")`
-    ).first();
-    await row.waitFor({ state: "visible", timeout: 10000 });
-
-    // ホバーして削除ボタンを表示
-    await row.hover();
-    await page.waitForTimeout(500);
-
-    let deleteBtn = await findVisibleDeleteButtonWithin(row);
-    if (!deleteBtn) {
-      const box = await row.boundingBox().catch(() => null);
-      if (box) {
-        // 右端に出るホバーゴミ箱を直接クリック（UI変更対策）
-        await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2).catch(() => {});
-        await page.waitForTimeout(400);
-        deleteBtn = await findVisibleDeleteButtonWithin(row);
-      }
-    }
-
-    if (!deleteBtn) {
-      console.log(`[delete] 削除ボタンが見つからないため、右クリックメニューを使用: ${target.name}`);
-      await row.click({ button: "right", force: true });
-      await page.waitForTimeout(500);
-      const delMenuItem = page.locator('[role="menuitem"]:has-text("削除"), [role="menuitem"]:has-text("Delete")').first();
-      if (await delMenuItem.isVisible().catch(() => false)) {
-        await delMenuItem.click({ force: true });
-      } else {
-        throw new Error(`削除ボタンも右クリックメニューも使えません: ${target.name}`);
-      }
-    } else {
-      await deleteBtn.click({ force: true });
-    }
 
     await page.waitForTimeout(500);
     await confirmTradingViewDialog(page);
@@ -1189,16 +1155,12 @@ async function getAllAlertTickerTexts(page) {
 
 async function getVisibleAlertRows(page) {
   const rowSelectors = [
-    '[data-name="alerts-log-item"]',
-    '[data-name="alert-log-item"]',
+
     '[data-name="alert-item"]',
     '[data-role="alert-item"]',
     '[data-qa-id*="alert-item"]',
     '[data-name*="alert-row"]',
-    '[data-name*="log-item"]',
-    '[class*="alertItem"]',
-    '[class*="alert-row"]',
-    '[class*="itemRow"]',
+
     '[class*="itemRow"][class*="alert"]',
   ];
 
@@ -1227,19 +1189,6 @@ async function getVisibleAlertRows(page) {
   return tickerRows;
 }
 
-async function getAlertActionRow(row) {
-  const candidates = [
-    row.locator('xpath=ancestor-or-self::*[@data-name="alerts-log-item" or @data-name="alert-item" or @data-role="alert-item"][1]').first(),
-    row.locator('xpath=ancestor-or-self::*[contains(@class,"itemRow") or contains(@class,"alert-row")][1]').first(),
-    row,
-  ];
-
-  for (const c of candidates) {
-    if (await c.isVisible().catch(() => false)) return c;
-  }
-
-  return row;
-}
 
 async function getAlertTickerFromRow(row) {
   const directTicker = row.locator('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]').first();
@@ -1294,47 +1243,7 @@ async function deleteManagedAlerts(page, prefixes) {
 
     console.log("Deleting alert:", targetText);
 
-    const actionRow = await getAlertActionRow(targetRow);
-    await actionRow.scrollIntoViewIfNeeded().catch(() => {});
-    await actionRow.hover().catch(() => {});
-    await page.waitForTimeout(400);
 
-    let deletedByTrash = false;
-    const trashBtn = await findVisibleDeleteButtonWithin(actionRow);
-    if (trashBtn) {
-      const clicked = await clickBestEffort(trashBtn, 8000);
-      if (clicked) {
-        deletedByTrash = true;
-      }
-    }
-
-    if (!deletedByTrash) {
-      const box = await actionRow.boundingBox().catch(() => null);
-      if (box) {
-        await page.mouse.move(box.x + Math.max(box.width - 12, 1), box.y + box.height / 2).catch(() => {});
-        await page.waitForTimeout(250);
-        await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2).catch(() => {});
-        await page.waitForTimeout(500);
-        const confirmDirect = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
-        if (await confirmDirect.isVisible().catch(() => false)) {
-          deletedByTrash = true;
-        }
-      }
-    }
-
-    if (!deletedByTrash) {
-      await actionRow.click({ force: true, timeout: 8000 }).catch(() => {});
-      await page.waitForTimeout(250);
-      await page.keyboard.press("Delete").catch(() => {});
-      await page.waitForTimeout(500);
-      const confirmByKey = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
-      if (await confirmByKey.isVisible().catch(() => false)) {
-        deletedByTrash = true;
-      }
-    }
-
-    if (!deletedByTrash) {
-      await actionRow.click({ button: "right", force: true, timeout: 8000 }).catch(() => {});
       await page.waitForTimeout(500);
 
       const del = page
