@@ -1186,6 +1186,19 @@ async function getVisibleAlertRows(page) {
   return tickerRows;
 }
 
+async function getAlertActionRow(row) {
+  const candidates = [
+    row.locator('xpath=ancestor-or-self::*[@data-name="alerts-log-item" or @data-name="alert-item" or @data-role="alert-item"][1]').first(),
+    row.locator('xpath=ancestor-or-self::*[contains(@class,"itemRow") or contains(@class,"alert-row")][1]').first(),
+    row,
+  ];
+
+  for (const c of candidates) {
+    if (await c.isVisible().catch(() => false)) return c;
+  }
+
+  return row;
+}
 
 async function getAlertTickerFromRow(row) {
   const directTicker = row.locator('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]').first();
