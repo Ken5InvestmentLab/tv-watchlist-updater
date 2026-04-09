@@ -1314,6 +1314,7 @@ async function deleteManagedAlerts(page, prefixes) {
     const deleted = await page.evaluate((row) => {
       // 行内の削除ボタンを探す（非表示でも DOM に存在する場合がある）
       const selectors = [
+        '[data-name="alert-delete-button"]',
         'button[aria-label="Delete alert"]',
         'button[aria-label="Delete"]',
         'button[aria-label="削除"]',
