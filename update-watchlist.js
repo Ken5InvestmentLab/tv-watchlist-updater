@@ -804,7 +804,7 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
 
     // 対象の行を再度取得
     const row = page.locator(
-      `[data-qa-id="menu-inner"] :is([class*="item-"], [role="menuitem"], [data-role="list-item"], div):has-text("${target.name}")`
+      `[data-qa-id="menu-inner"] [data-role="menuitem"]:has-text("${target.name}")`
     ).first();
     await row.waitFor({ state: "visible", timeout: 10000 });
 
@@ -812,46 +812,32 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     await row.hover();
     await page.waitForTimeout(800);
 
-    // デバッグ用: 行内の全HTMLをダンプして構造を見る
-    const rowHandle = await row.elementHandle().catch(() => null);
-    if (rowHandle) {
-      const htmlDump = await page.evaluate((el) => el.innerHTML, rowHandle);
-      console.log(`🛠️ [デバッグ] ウォッチリスト行の完全なHTML (${target.name}):`, htmlDump);
-    }
-
     let deleteBtn = await findVisibleDeleteButtonWithin(row);
 
-    // HTML内にSVGやボタンがあるはずなので直接クリック試行
-    if (!deleteBtn && rowHandle) {
-      const clicked = await page.evaluate((el) => {
-        // [aria-label="Add to favorites"] 以外のボタンや、右端にありそうな要素を片っ端からクリック
-        const items = Array.from(el.querySelectorAll('button:not([aria-label="Add to favorites"]), svg:not([class*="star"])'));
-        // 念のため一番最後尾の要素（右端のXボタンであることが多い）を狙う
-        const target = items[items.length - 1];
-        if (target && typeof target.click === 'function') {
-          target.click();
-          return true;
-        } else if (target) {
-          // SVG等の場合click関数がないかもしれないのでイベント発火
-          target.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-          return true;
-        }
-        return false;
-      }, rowHandle);
-
-      if (clicked) {
-        console.log(`[delete] Evaluateで削除ボタンを強制クリックしました: ${target.name}`);
-        // クリックできたらdeleteBtnのダミーを入れる
-        deleteBtn = true;
-      }
-    }
-
     if (!deleteBtn) {
-      console.log(`❌ [delete] 削除ボタンが見つかりません。Deleteキーを試行します: ${target.name}`);
-      await row.click().catch(() => {});
-      await page.waitForTimeout(300);
-      await page.keyboard.press('Delete').catch(() => {});
-    } else if (deleteBtn !== true) {
+      console.log(`[delete] ネイティブの削除ボタンが存在しないため、右クリックメニューを使用します: ${target.name}`);
+      await row.click({ button: "right", force: true });
+      await page.waitForTimeout(500);
+      
+      const delMenuItem = page.locator([
+        '[role="menuitem"]:has-text("削除")',
+        '[role="menuitem"]:has-text("Delete")',
+        '[role="menuitem"]:has-text("Remove")',
+        '[data-role="menuitem"]:has-text("削除")',
+        '[data-role="menuitem"]:has-text("Delete")',
+        '[data-role="menuitem"]:has-text("Remove")',
+        'div[class*="item"]:has-text("削除")',
+        'div[class*="item"]:has-text("Delete")',
+        'div[class*="item"]:has-text("Remove")'
+      ].join(', ')).first();
+
+      if (await delMenuItem.isVisible().catch(() => false)) {
+        console.log(`[delete] 右クリックメニューから削除を実行します: ${target.name}`);
+        await delMenuItem.click({ force: true });
+      } else {
+        throw new Error(`右クリックメニューにも削除項目が見つかりません: ${target.name}`);
+      }
+    } else {
       console.log(`[delete] 削除ボタンを直接クリックしました: ${target.name}`);
       await deleteBtn.click({ force: true }).catch(() => {});
     }
