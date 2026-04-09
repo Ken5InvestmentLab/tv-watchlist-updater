@@ -136,13 +136,20 @@ async function findVisibleDeleteButtonWithin(scope, page = null) {
     'button[data-name="delete-button"]',
     'button[data-qa-id="remove-button"]',
     '[data-qa-id="remove-button"]',
+    '[data-name="remove-button"]',
+    '[data-name="remove"]',
+    '[data-name="delete"]',
     'button[aria-label*="削除"]',
     'button[aria-label*="Delete"]',
     'button[aria-label*="Remove"]',
-    'button[class*="remove"]',
-    'button[class*="delete"]',
+    '[aria-label*="削除"]',
+    '[aria-label*="Delete"]',
+    '[aria-label*="Remove"]',
+    '[class*="remove"]',
+    '[class*="delete"]',
     'button:has([data-name*="trash"])',
     'button:has([class*="trash"])',
+    'svg[class*="remove"]',
   ];
 
   for (const sel of deleteBtnSelectors) {
@@ -150,13 +157,8 @@ async function findVisibleDeleteButtonWithin(scope, page = null) {
     if (await btn.isVisible().catch(() => false)) return btn;
   }
 
-  if (page) {
-    for (const sel of deleteBtnSelectors) {
-      const btn = page.locator(sel).first();
-      if (await btn.isVisible().catch(() => false)) return btn;
-    }
-  }
-
+  // scope に見つからない場合、親に近い階層でその行に紐づくかもしれない要素だけを限定的に探す
+  // 以前の全体(page)からの取得は関係ないアラート削除ボタン等を拾うため削除
   return null;
 }
 
@@ -825,13 +827,26 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
       console.log(`[delete] 削除ボタンが見つからないため、右クリックメニューを使用: ${target.name}`);
       await row.click({ button: "right", force: true });
       await page.waitForTimeout(500);
-      const delMenuItem = page.locator('[role="menuitem"]:has-text("削除"), [role="menuitem"]:has-text("Delete")').first();
+      const delMenuItem = page.locator([
+        '[role="menuitem"]:has-text("削除")',
+        '[role="menuitem"]:has-text("Delete")',
+        '[role="menuitem"]:has-text("Remove")',
+        '[data-role="menuitem"]:has-text("削除")',
+        '[data-role="menuitem"]:has-text("Delete")',
+        '[data-role="menuitem"]:has-text("Remove")',
+        'div[class*="item"]:has-text("削除")',
+        'div[class*="item"]:has-text("Delete")',
+        'div[class*="item"]:has-text("Remove")'
+      ].join(', ')).first();
+
       if (await delMenuItem.isVisible().catch(() => false)) {
+        console.log(`[delete] 右クリックメニューから削除を実行します: ${target.name}`);
         await delMenuItem.click({ force: true });
       } else {
         throw new Error(`削除ボタンも右クリックメニューも使えません: ${target.name}`);
       }
     } else {
+      console.log(`[delete] 削除ボタンを直接クリックしました: ${target.name}`);
       await deleteBtn.click({ force: true });
     }
 
