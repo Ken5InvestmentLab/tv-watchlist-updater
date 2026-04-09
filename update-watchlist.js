@@ -1222,15 +1222,104 @@ async function deleteManagedAlerts(page, prefixes) {
     let targetText = "";
 
     for (const row of rows) {
-  const txt = await getAlertTickerFromRow(row);
-  if (!txt) continue;
+      const txt = await getAlertTickerFromRow(row);
+      if (!txt) continue;
 
-  const matched = prefixes.some((p) => txt.startsWith(`${p}_`) || txt.startsWith(`${p},`) || txt === p);
-  if (matched) {
-    targetRow = row;
-    targetText = txt;
-    break;
+      const matched = prefixes.some((p) => txt.startsWith(`${p}_`) || txt.startsWith(`${p},`) || txt === p);
+      if (matched) {
+        targetRow = row;
+        targetText = txt;
+        break;
+      }
+    }
+
+    if (!targetRow) {
+      console.log("No more managed alerts.");
+      return;
+    }
+
+    console.log("Deleting alert:", targetText);
+
+    const actionRow = await getAlertActionRow(targetRow);
+    await actionRow.scrollIntoViewIfNeeded().catch(() => {});
+    await actionRow.hover().catch(() => {});
+    await page.waitForTimeout(400);
+
+    let deletedByTrash = false;
+    const trashBtn = await findVisibleDeleteButtonWithin(actionRow);
+    if (trashBtn) {
+      const clicked = await clickBestEffort(trashBtn, 8000);
+      if (clicked) {
+        deletedByTrash = true;
+      }
+    }
+
+    if (!deletedByTrash) {
+      const box = await actionRow.boundingBox().catch(() => null);
+      if (box) {
+        await page.mouse.move(box.x + Math.max(box.width - 12, 1), box.y + box.height / 2).catch(() => {});
+        await page.waitForTimeout(250);
+        await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2).catch(() => {});
+        await page.waitForTimeout(500);
+        const confirmDirect = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
+        if (await confirmDirect.isVisible().catch(() => false)) {
+          deletedByTrash = true;
+        }
+      }
+    }
+
+    if (!deletedByTrash) {
+      await actionRow.click({ force: true, timeout: 8000 }).catch(() => {});
+      await page.waitForTimeout(250);
+      await page.keyboard.press("Delete").catch(() => {});
+      await page.waitForTimeout(500);
+      const confirmByKey = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
+      if (await confirmByKey.isVisible().catch(() => false)) {
+        deletedByTrash = true;
+      }
+    }
+
+    if (!deletedByTrash) {
+      await actionRow.click({ button: "right", force: true, timeout: 8000 }).catch(() => {});
+      await page.waitForTimeout(500);
+
+      const del = page
+        .locator('[role="menuitem"], tr[data-role="menuitem"], [data-role="menuitem"]')
+        .filter({ hasText: /^削除$|^Delete$/i })
+        .first();
+      const ok = await safeClick(del, { timeout: 8000, force: true });
+
+      if (!ok) {
+        await safeScreenshot(page, `alert_delete_menu_not_found_${Date.now()}`);
+        throw new Error(`アラート削除メニューが見つかりませんでした: ${targetText}`);
+      }
+    }
+
+    const confirm = page.getByRole("button", { name: /削除|Delete|はい|Yes|OK/i }).first();
+    const confirmOk = await safeClick(confirm, { timeout: 8000, force: true });
+
+    if (!confirmOk) {
+      await safeScreenshot(page, `alert_delete_confirm_not_found_${Date.now()}`);
+      throw new Error(`アラート削除確認ボタンが押せませんでした: ${targetText}`);
+    }
+
+    let deleted = false;
+    for (let i = 0; i < 10; i++) {
+      await page.waitForTimeout(800);
+      const texts = await getManagedAlertTickerTexts(page, prefixes);
+      if (!texts.includes(targetText)) {
+        deleted = true;
+        break;
+      }
+    }
+
+    if (!deleted) {
+      await safeScreenshot(page, `alert_delete_not_reflected_${Date.now()}`);
+      throw new Error(`アラート削除後も項目が残っています: ${targetText}`);
+    }
   }
+
+  throw new Error("アラート削除ループが上限に達しました");
 }
 
     if (!targetRow) {
