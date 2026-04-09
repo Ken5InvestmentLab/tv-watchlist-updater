@@ -833,9 +833,6 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
   console.log(`[delete] "${prefix}" の削除完了`);
 }
 
-/**
- * TradingViewの確認ダイアログ（「本当に削除しますか？」等）を確実に承認する関数
- */
 async function confirmTradingViewDialog(page) {
   console.log("[dialog] 確認ダイアログを待機中...");
 
@@ -1224,14 +1221,7 @@ async function getVisibleAlertRows(page) {
     const visible = [];
     for (let i = 0; i < count; i++) {
       const row = rows.nth(i);
-      if (!(await row.isVisible().catch(() => false))) continue;
-      // Log行（削除不能）を避けるため、ticker要素を持つ行を優先
-      const hasTicker = await row
-        .locator('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]')
-        .first()
-        .isVisible()
-        .catch(() => false);
-      if (hasTicker) visible.push(row);
+
     }
     if (visible.length > 0) return visible;
   }
@@ -1261,77 +1251,11 @@ async function getAlertActionRow(row) {
 
   return row;
 }
-
-async function clickAlertRowActionMenuIfVisible(actionRow) {
-  const menuButtonSelectors = [
-    'button[aria-label*="More"]',
-    'button[aria-label*="more"]',
-    'button[aria-label*="その他"]',
-    'button[aria-label*="メニュー"]',
-    'button[aria-haspopup="menu"]',
-    'button[data-name*="menu"]',
-    'button[data-qa-id*="menu"]',
-  ];
-
-  for (const sel of menuButtonSelectors) {
-    const btn = actionRow.locator(sel).last();
-    if (!(await btn.isVisible().catch(() => false))) continue;
-
-    const box = await btn.boundingBox().catch(() => null);
-    const rowBox = await actionRow.boundingBox().catch(() => null);
-    if (box && rowBox) {
-      // 行右端の操作ボタンらしい位置に限定
-      if (box.x < rowBox.x + rowBox.width * 0.6) continue;
-      // 大きすぎるボタン（行全体を覆う等）は誤検出の可能性が高い
-      if (box.width > rowBox.width * 0.5) continue;
-    }
-
-    const ok = await clickBestEffort(btn, 6000);
-    if (ok) return true;
-  }
-
-  // 最後の手段: 右端にある「svgだけの小さなボタン」を試す
-  const iconButtons = actionRow.locator('button:has(svg)');
-  const iconCount = Math.min(await iconButtons.count().catch(() => 0), 5);
-  for (let i = iconCount - 1; i >= 0; i--) {
-    const btn = iconButtons.nth(i);
-    if (!(await btn.isVisible().catch(() => false))) continue;
-
-    const box = await btn.boundingBox().catch(() => null);
-    const rowBox = await actionRow.boundingBox().catch(() => null);
-    if (box && rowBox) {
-      if (box.x < rowBox.x + rowBox.width * 0.65) continue;
-      if (box.width > 80 || box.height > 80) continue;
-    }
-
-    const ok = await clickBestEffort(btn, 6000);
-    if (ok) return true;
-  }
-
-  return false;
-}
-
-async function findVisibleDeleteMenuItem(page) {
-  const menuItemLocator = page
-    .locator('[role="menuitem"], [data-role="menuitem"], tr[data-role="menuitem"], button')
-    .filter({ hasText: /削除|Delete|delete|Remove|remove/i });
-
-  const count = Math.min(await menuItemLocator.count().catch(() => 0), 10);
-  for (let i = 0; i < count; i++) {
-    const item = menuItemLocator.nth(i);
-    if (await item.isVisible().catch(() => false)) return item;
-  }
-
-  return null;
-}
-
 async function getAlertTickerFromRow(row) {
   const directTicker = row.locator('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]').first();
   if (await directTicker.isVisible().catch(() => false)) {
     return ((await directTicker.textContent().catch(() => "")) || "").trim();
   }
-
-  return "";
 }
 
 async function getManagedAlertTickerTexts(page, prefixes) {
@@ -1405,20 +1329,7 @@ async function deleteManagedAlerts(page, prefixes) {
     }
 
     if (!deletedByTrash) {
-      const openedMenu = await clickAlertRowActionMenuIfVisible(actionRow);
-      if (openedMenu) {
-        await page.waitForTimeout(350);
-        const delFromActionMenu = await findVisibleDeleteMenuItem(page);
-        if (delFromActionMenu) {
-          const clicked = await safeClick(delFromActionMenu, { timeout: 6000, force: true });
-          if (clicked) {
-            deletedByTrash = true;
-          }
-        }
-      }
-    }
 
-    if (!deletedByTrash) {
       await actionRow.click({ force: true, timeout: 8000 }).catch(() => {});
       await page.waitForTimeout(250);
       await page.keyboard.press("Delete").catch(() => {});
@@ -1433,8 +1344,7 @@ async function deleteManagedAlerts(page, prefixes) {
       await actionRow.click({ button: "right", force: true, timeout: 8000 }).catch(() => {});
       await page.waitForTimeout(500);
 
-      const del = await findVisibleDeleteMenuItem(page);
-      const ok = del ? await safeClick(del, { timeout: 8000, force: true }) : false;
+
 
       if (!ok) {
         await safeScreenshot(page, `alert_delete_menu_not_found_${Date.now()}`);
@@ -1469,10 +1379,6 @@ async function deleteManagedAlerts(page, prefixes) {
   throw new Error("アラート削除ループが上限に達しました");
 }
 
-/**
- * ウォッチリストのドロップダウンメニューを確実に開く関数
- * テキストベースの判定、属性指定、強制クリックを組み合わせています。
- */
 async function openWatchlistMenuHard(page, retryCount = 8) {
   const buttonSelector = 'button[data-name="watchlists-button"]';
   // 提供いただいたHTMLから判明した「正解のメニューセレクタ」
