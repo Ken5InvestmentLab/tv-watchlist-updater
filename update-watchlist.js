@@ -736,6 +736,11 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
   const prefixes = [prefix, prefix.replace('l', '')];
   console.log(`[delete] "${prefix}" で始まるウォッチリストを削除します（バリエーション: ${prefixes.join(', ')}）...`);
 
+  // ウォッチリストタブ（右サイドバー）が開いていることを保証
+  if (typeof ensureWatchlistPanelOpen === 'function') {
+    await ensureWatchlistPanelOpen(page).catch(e => console.log("ensureWatchlistPanelOpen failed: " + e.message));
+  }
+
   // 削除対象のリスト名を収集
   let targets = [];
   for (let retry = 0; retry < 3; retry++) {
@@ -1468,23 +1473,34 @@ async function deleteManagedAlerts(page, prefixes) {
 }
 
 async function openWatchlistMenuHard(page, retryCount = 8) {
-  const buttonSelector = 'button[data-name="watchlists-button"]';
-  // 提供いただいたHTMLから判明した「正解のメニューセレクタ」
-  const menuSelector = '[data-qa-id="active-watchlist-menu"]';
-  const menuInnerSelector = '[data-qa-id="menu-inner"]';
+  const menuSelector = '[data-qa-id="active-watchlist-menu"], [data-role="menu"]';
+  const menuInnerSelector = '[data-qa-id="menu-inner"], [role="menu"]';
 
   for (let i = 0; i < retryCount; i++) {
     try {
       console.log(`[menu] ウォッチリストメニューを開こうとしています... (試行 ${i + 1}/${retryCount})`);
 
       // 既にメニューが開いているかチェック（二重クリック防止）
-      if (await page.locator(menuSelector).isVisible()) {
+      if (await page.locator(menuSelector).first().isVisible().catch(() => false)) {
         console.log('[menu] メニューは既に開いています。');
         return true;
       }
 
-      const button = page.locator(buttonSelector).first();
-      await button.waitFor({ state: 'visible', timeout: 5000 });
+      let button = null;
+      if (typeof getWatchlistButton === 'function') {
+        button = await getWatchlistButton(page);
+      }
+      if (!button) {
+        await page.waitForTimeout(1000);
+        if (typeof getWatchlistButton === 'function') button = await getWatchlistButton(page);
+      }
+      if (!button) {
+        button = page.locator('button[data-name="watchlists-button"], button[aria-label*="Watchlist"], button[aria-label*="ウォッチリスト"]').first();
+        if (!(await button.isVisible().catch(() => false))) {
+          console.warn(`[menu] ウォッチリストボタンが見つからないためリトライします...`);
+          continue;
+        }
+      }
 
       // 1. 通常クリックを試行
       // 手動でどこを押しても開くとのことなので、まずはボタン中央をクリック
