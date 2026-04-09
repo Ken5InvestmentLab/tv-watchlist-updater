@@ -130,7 +130,7 @@ async function firstVisible(locator, max = 30) {
   return null;
 }
 
-async function findVisibleDeleteButtonWithin(scope) {
+async function findVisibleDeleteButtonWithin(scope, page = null) {
   const deleteBtnSelectors = [
     'button[data-name="remove-button"]',
     'button[data-name="delete-button"]',
@@ -148,6 +148,13 @@ async function findVisibleDeleteButtonWithin(scope) {
   for (const sel of deleteBtnSelectors) {
     const btn = scope.locator(sel).first();
     if (await btn.isVisible().catch(() => false)) return btn;
+  }
+
+  if (page) {
+    for (const sel of deleteBtnSelectors) {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible().catch(() => false)) return btn;
+    }
   }
 
   return null;
@@ -798,14 +805,14 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     await row.hover();
     await page.waitForTimeout(500);
 
-    let deleteBtn = await findVisibleDeleteButtonWithin(row);
+    let deleteBtn = await findVisibleDeleteButtonWithin(row, page);
     if (!deleteBtn) {
       const box = await row.boundingBox().catch(() => null);
       if (box) {
         // 右端に出るホバーゴミ箱を直接クリック（UI変更対策）
         await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2).catch(() => {});
         await page.waitForTimeout(400);
-        deleteBtn = await findVisibleDeleteButtonWithin(row);
+        deleteBtn = await findVisibleDeleteButtonWithin(row, page);
       }
     }
 
@@ -1304,7 +1311,7 @@ async function deleteManagedAlerts(page, prefixes) {
     await page.waitForTimeout(400);
 
     let deletedByTrash = false;
-    const trashBtn = await findVisibleDeleteButtonWithin(actionRow);
+    const trashBtn = await findVisibleDeleteButtonWithin(actionRow, page);
     if (trashBtn) {
       const clicked = await clickBestEffort(trashBtn, 8000);
       if (clicked) {
