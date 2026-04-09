@@ -155,7 +155,16 @@ async function getWatchlistButton(page) {
   const classBtn = page.locator('button[class*="watchlist"], button[class*="Watchlist"]').first();
   if (await classBtn.isVisible().catch(() => false)) return classBtn;
 
-  // 6. 最終手段: SVG アイコンの親ボタン
+  // 6. 右側のアイコン列にあるボタン（アイコンの形状や位置から推測）
+  const rightSidebarBtns = page.locator('.layout__area--right button, [class*="right-toolbar"] button');
+  const count = await rightSidebarBtns.count().catch(() => 0);
+  for (let i = 0; i < count; i++) {
+    const btn = rightSidebarBtns.nth(i);
+    const txt = await readLocatorTextWithAttrs(btn);
+    if (/ウォッチリスト|Watchlist/i.test(txt)) return btn;
+  }
+
+  // 7. 最終手段: SVG アイコンの親ボタン
   const svgBtn = page.locator('svg').locator('xpath=ancestor::button').first();
   if (await svgBtn.isVisible().catch(() => false)) return svgBtn;
 
@@ -938,8 +947,6 @@ async function deleteManagedAlerts(page, prefixes) {
  * ウォッチリストのドロップダウンメニューを確実に開く関数
  */
 async function openWatchlistMenuHard(page, retryCount = 8) {
-  const buttonSelector = 'button[data-name="watchlists-button"]';
-  
   for (let i = 0; i < retryCount; i++) {
     console.log(`[menu] ウォッチリストメニューを開こうとしています... (試行 ${i + 1}/${retryCount})`);
     
@@ -951,8 +958,8 @@ async function openWatchlistMenuHard(page, retryCount = 8) {
     }
     
     // ボタンを取得
-    const button = page.locator(buttonSelector).first();
-    if (!await button.isVisible().catch(() => false)) {
+    const button = await getWatchlistButton(page);
+    if (!button || !await button.isVisible().catch(() => false)) {
       console.warn('[menu] ウォッチリストボタンが見えません。リトライします。');
       await page.waitForTimeout(1000);
       continue;
@@ -1094,9 +1101,6 @@ async function configureAlertSettings(page, listName) {
     await page.keyboard.press("Escape");
   }
   await page.waitForTimeout(800);
-
-  // 有効期限を最大（1年後など）に設定するロジック（必要なら）
-  // ここではデフォルトのまま進める
 }
 
 async function ensure4HTimeframe(page) {
@@ -1153,8 +1157,28 @@ async function assertManagedAlertCreated(page, listName) {
 }
 
 async function waitForTradingViewReady(page) {
-  await page.waitForSelector('button[data-name="watchlists-button"]', { timeout: 30000 });
-  console.log("TradingView UI ready and watchlist button visible.");
+  // 複数の候補で待機
+  const readySelectors = [
+    'button[data-name="watchlists-button"]',
+    '.layout__area--right',
+    '.chart-container',
+    'button[data-name="alerts"]'
+  ];
+  
+  let ready = false;
+  for (const sel of readySelectors) {
+    try {
+      await page.waitForSelector(sel, { timeout: 10000 });
+      ready = true;
+      break;
+    } catch (e) {}
+  }
+  
+  if (!ready) {
+    console.warn("TradingView UI might not be fully ready, but proceeding...");
+  } else {
+    console.log("TradingView UI ready.");
+  }
 }
 
 async function isChangeIntervalDialogOpen(page) {
@@ -1175,19 +1199,6 @@ async function isWatchlistPromoDialogVisible(page) {
 async function closeWatchlistPromoDialog(page) {
   const btn = page.locator('div[role="dialog"] button').filter({ hasText: /Close|閉じる/i }).first();
   await btn.click({ force: true });
-}
-
-async function describeLocator(locator) {
-  try {
-    return await locator.evaluate(el => ({
-      tag: el.tagName,
-      text: el.innerText,
-      ariaLabel: el.getAttribute('aria-label'),
-      dataName: el.getAttribute('data-name')
-    }));
-  } catch {
-    return null;
-  }
 }
 
 function normalizeTvText(s = "") {
@@ -1365,8 +1376,6 @@ async function dumpAlertTickerTexts(page) {
       if (remainAlerts.length > 0) {
         await safeScreenshot(page, "alerts_remain_after_delete");
         console.warn(`アラート削除後も残っています: ${remainAlerts.join(", ")}`);
-        // 続行するかエラーにするか。ユーザーの要望は「狙い撃ち削除」なので、残っている場合はリトライするか警告を出す。
-        // ここでは一旦警告に留め、処理を続行する（完全に消えない場合でもインポート等は進めたいため）
       }
 
       console.log("After delete: alert ticker dump");
