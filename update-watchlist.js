@@ -1140,6 +1140,20 @@ async function ensureAlertsPanelOpen(page) {
       await openAlertsPanel(page);
     }
 
+    // 「Log」タブを掴んでしまうケース対策：毎回 Alerts タブを明示的に押す
+    const forceAlertsTabCandidates = [
+      page.locator('[role="tab"]').filter({ hasText: /^Alerts$|^アラート$/i }).first(),
+      page.locator('button').filter({ hasText: /^Alerts$|^アラート$/i }).first(),
+      page.locator('[data-name*="alert"][role="tab"]').filter({ hasText: /Alerts|アラート/i }).first(),
+    ];
+    for (const tab of forceAlertsTabCandidates) {
+      if (await tab.isVisible().catch(() => false)) {
+        await safeClick(tab, { timeout: 4000, force: true });
+        await page.waitForTimeout(500);
+        break;
+      }
+    }
+
     const alertsTabCandidates = [
       page.getByRole("tab", { name: /^Alerts$|^アラート$/i }).first(),
       page.locator('[role="tab"]').filter({ hasText: /^Alerts$|^アラート$/i }).first(),
@@ -1207,7 +1221,7 @@ async function getVisibleAlertRows(page) {
     const visible = [];
     for (let i = 0; i < count; i++) {
       const row = rows.nth(i);
-      if (await row.isVisible().catch(() => false)) visible.push(row);
+
     }
     if (visible.length > 0) return visible;
   }
@@ -1237,16 +1251,11 @@ async function getAlertActionRow(row) {
 
   return row;
 }
-
 async function getAlertTickerFromRow(row) {
   const directTicker = row.locator('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]').first();
   if (await directTicker.isVisible().catch(() => false)) {
     return ((await directTicker.textContent().catch(() => "")) || "").trim();
   }
-
-  const fallbackText = ((await row.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
-  const token = fallbackText.split(" ")[0] || "";
-  return token;
 }
 
 async function getManagedAlertTickerTexts(page, prefixes) {
@@ -1320,6 +1329,7 @@ async function deleteManagedAlerts(page, prefixes) {
     }
 
     if (!deletedByTrash) {
+
       await actionRow.click({ force: true, timeout: 8000 }).catch(() => {});
       await page.waitForTimeout(250);
       await page.keyboard.press("Delete").catch(() => {});
@@ -1334,11 +1344,7 @@ async function deleteManagedAlerts(page, prefixes) {
       await actionRow.click({ button: "right", force: true, timeout: 8000 }).catch(() => {});
       await page.waitForTimeout(500);
 
-      const del = page
-        .locator('[role="menuitem"], tr[data-role="menuitem"], [data-role="menuitem"]')
-        .filter({ hasText: /^削除$|^Delete$/i })
-        .first();
-      const ok = await safeClick(del, { timeout: 8000, force: true });
+
 
       if (!ok) {
         await safeScreenshot(page, `alert_delete_menu_not_found_${Date.now()}`);
