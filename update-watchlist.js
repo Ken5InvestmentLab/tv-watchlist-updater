@@ -1306,100 +1306,97 @@ async function deleteManagedAlerts(page, prefixes) {
       continue;
     }
 
-    // 行をビュー内にスクロール
-    await targetRow.scrollIntoViewIfNeeded();
-    await page.waitForTimeout(500);
+    // 行の要素ハンドルを取得
+    const rowHandle = await targetRow.elementHandle();
+    if (!rowHandle) continue;
 
-    // ホバーしてゴミ箱ボタンを出現させる
-    await targetRow.hover({ force: true });
-    await page.waitForTimeout(1500); // 余裕を持って待機
-
-    let deleted = false;
-
-    // 方法1: ゴミ箱ボタンを探す (多くのバリエーション)
-    const trashSelectors = [
-      'button[aria-label="Delete alert"]',
-      'button[aria-label="削除"]',
-      'button[data-name="remove-button"]',
-      'button[data-role="remove"]',
-      'button[class*="deleteButton"]',
-      'button[class*="removeButton"]',
-      'button:has(svg[class*="delete"])',
-      'button:has(svg[class*="trash"])',
-    ];
-
-    let trashBtn = null;
-    for (const sel of trashSelectors) {
-      // 行内で検索
-      const btn = targetRow.locator(sel).first();
-      if (await btn.count() > 0 && await btn.isVisible({ timeout: 500 }).catch(() => false)) {
-        trashBtn = btn;
-        break;
-      }
-    }
-
-    if (trashBtn) {
-      console.log("✅ ゴミ箱ボタン発見、クリックします");
-      await trashBtn.click({ force: true });
-      await page.waitForTimeout(2000);
-      await confirmTradingViewDialog(page);
-    } else {
-      console.log("⚠️ ゴミ箱ボタンが見つかりません。右クリックを試します");
-
-      // 方法2: 右クリック (行に対して直接)
-      // まずは行をクリックしてフォーカスを得る（任意）
-      await targetRow.click({ force: true, timeout: 2000 }).catch(() => {});
-      await page.waitForTimeout(500);
-      
-      // 右クリックを実行
-      await targetRow.click({ button: 'right', force: true, timeout: 3000 });
-      await page.waitForTimeout(1500);
-
-      // コンテキストメニューの出現を確認
-      const menu = await page.waitForSelector('[role="menu"], [data-role="menu"]', { timeout: 3000 }).catch(() => null);
-      if (menu) {
-        console.log("右クリックメニューが表示されました");
-        // 削除項目を探す
-        const deleteMenuItem = menu.locator('[role="menuitem"], [data-role="menuitem"]').filter({ hasText: /削除|Delete/i }).first();
-        if (await deleteMenuItem.isVisible({ timeout: 2000 }).catch(() => false)) {
-          console.log("✅ メニュー内「削除」をクリック");
-          await deleteMenuItem.click({ force: true });
-          await page.waitForTimeout(2000);
-          await confirmTradingViewDialog(page);
-        } else {
-          console.log("❌ メニュー内に削除項目が見つかりません");
-          // デバッグ用にメニューHTMLを出力
-          const html = await menu.evaluate(el => el.outerHTML);
-          console.log("Menu HTML snippet:", html.slice(0, 500));
+    // 1. 強制的に削除ボタンを探してクリック（DOM 直接操作）
+    const deleted = await page.evaluate((row) => {
+      // 行内の削除ボタンを探す（非表示でも DOM に存在する場合がある）
+      const selectors = [
+        'button[aria-label="Delete alert"]',
+        'button[aria-label="Delete"]',
+        'button[aria-label="削除"]',
+        'button[data-name="remove-button"]',
+        'button[data-qa-id="remove-button"]',
+        'button[class*="delete"]',
+        'button[class*="remove"]',
+        'button[class*="trash"]',
+      ];
+      for (const sel of selectors) {
+        const btn = row.querySelector(sel);
+        if (btn) {
+          btn.click();
+          return true;
         }
-      } else {
-        console.log("❌ 右クリックメニューが表示されませんでした。キーボード削除を試行します");
+      }
+      // ホバーを強制的に発火させてボタンを出現させる
+      row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      // 少し待ってから再度探索
+      return new Promise(resolve => {
+        setTimeout(() => {
+          for (const sel of selectors) {
+            const btn = row.querySelector(sel);
+            if (btn) {
+              btn.click();
+              resolve(true);
+              return;
+            }
+          }
+          resolve(false);
+        }, 500);
+      });
+    }, rowHandle);
 
-        // 方法3: Deleteキーを試す
-        await targetRow.click({ force: true }); // フォーカス
-        await page.keyboard.press('Delete');
-        await page.waitForTimeout(1500);
-        await confirmTradingViewDialog(page);
+    if (deleted) {
+      console.log("✅ 削除ボタンを直接クリックしました");
+      await page.waitForTimeout(1500);
+    } else {
+      console.log("⚠️ 削除ボタンが見つからないため、右クリックメニューを強制表示します");
+
+      // 2. 右クリックメニューを強制表示（座標指定）
+      const box = await targetRow.boundingBox();
+      if (box) {
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: 'right' });
+        await page.waitForTimeout(800);
+
+        // メニュー内の削除項目を探す（page.evaluate で直接クリック）
+        const menuDeleted = await page.evaluate(() => {
+          const menu = document.querySelector('[data-role="menu"], [role="menu"]');
+          if (!menu) return false;
+          const deleteItem = Array.from(menu.querySelectorAll('[data-role="menuitem"], [role="menuitem"]')).find(el =>
+            /削除|Delete/i.test(el.textContent || '')
+          );
+          if (deleteItem) {
+            (deleteItem as HTMLElement).click();
+            return true;
+          }
+          return false;
+        });
+
+        if (menuDeleted) {
+          console.log("✅ 右クリックメニューから削除しました");
+          await page.waitForTimeout(1500);
+        } else {
+          console.log("❌ 右クリックメニューにも削除項目なし");
+        }
       }
     }
 
-    // 削除完了を待機 (最大20秒)
-    for (let i = 0; i < 20; i++) {
+    // 削除確認（最大15秒）
+    let success = false;
+    for (let i = 0; i < 15; i++) {
       const remaining = await getManagedAlertTickerTexts(page, prefixes);
       if (!remaining.includes(targetText)) {
-        deleted = true;
+        success = true;
         console.log(`🎉 削除成功: ${targetText}`);
         break;
-      }
-      // 再描画を促すためスクロール
-      if (i % 3 === 0) {
-        await page.mouse.wheel(0, 200);
-        await page.waitForTimeout(300);
       }
       await page.waitForTimeout(1000);
     }
 
-    if (!deleted) {
+    if (!success) {
       await safeScreenshot(page, `alert_delete_failed_${Date.now()}`);
       throw new Error(`アラート削除に失敗しました: ${targetText}`);
     }
