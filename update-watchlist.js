@@ -768,7 +768,6 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
 
   throw new Error(`削除ループが上限に達しました: ${prefix}`);
 }
-}
 
 async function confirmTradingViewDialog(page) {
   console.log("[dialog] 確認ダイアログを待機中...");
