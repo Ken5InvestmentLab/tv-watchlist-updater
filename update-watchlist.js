@@ -710,37 +710,72 @@ async function assertWatchlistExists(page, listName) {
 async function deleteManagedWatchlistsByPrefix(page, prefix) {
   console.log(`[delete] "${prefix}" で始まるウォッチリストを削除します...`);
 
-  // 「リストを開く」ダイアログを開く（ゴミ箱アイコンはこのダイアログ内のみ存在）
-  await openListOpenDialog(page);
-
   for (let round = 0; round < 80; round++) {
-    // ダイアログ内のリスト行を取得
+    // 毎ラウンド、ダイアログを閉じてから「メニュー → リストを開く」手順で再オープン
+    // （削除後に TradingView が管理対象リストをアクティブにするため、
+    //   毎回の再オープンで非管理対象へ切り替えてからゴミ箱を出す必要がある）
+    await closeOpenListDialogIfVisible(page).catch(() => {});
+    await openListOpenDialog(page);
+
     const rows = page.locator('div[data-role="list-item"][data-title]');
     const count = await rows.count().catch(() => 0);
     console.log(`[delete] Dialog rows found (round ${round}): ${count}`);
 
-    let anyMatch = false;
-    let deleted = false;
+    // 削除対象の有無と、切り替え先となる非管理対象ウォッチリスト名を収集
+    let targetFound = false;
+    let nonManagedTitle = null;
 
     for (let i = 0; i < count; i++) {
       const row = rows.nth(i);
       const dataTitle = ((await row.getAttribute("data-title").catch(() => "")) || "").trim();
-      const fallbackText = ((await row.textContent().catch(() => "")) || "").trim();
-      const text = dataTitle || fallbackText;
+      if (!dataTitle) continue;
 
-      if (!isManagedListName(text, prefix)) continue;
-      anyMatch = true;
+      if (isManagedListName(dataTitle, prefix)) {
+        targetFound = true;
+      } else if (!nonManagedTitle) {
+        nonManagedTitle = dataTitle;
+      }
+    }
 
-      console.log(`[delete] "${text}" を削除中... (row index ${i})`);
+    if (!targetFound) {
+      console.log(`[delete] 対象なし: "${prefix}"`);
+      await closeOpenListDialogIfVisible(page).catch(() => {});
+      await closeAnyMenu(page);
+      return;
+    }
 
-      // ホバーしてゴミ箱アイコンを表示
+    // 削除対象がアクティブな状態だとゴミ箱アイコンが表示されない。
+    // 非管理対象ウォッチリストをクリックしてアクティブを切り替えてから
+    // ダイアログを再オープンする。
+    if (nonManagedTitle) {
+      console.log(`[delete] 非管理対象 "${nonManagedTitle}" に一時切り替え（アクティブ解除）...`);
+      const nonManagedRow = page.locator(`div[data-role="list-item"][data-title="${nonManagedTitle}"]`).first();
+      await nonManagedRow.click({ force: true });
+      await page.waitForTimeout(1500);
+      // クリック後にダイアログが閉じた場合は再オープンする
+      await openListOpenDialog(page);
+    } else {
+      console.log(`[delete] 非管理対象が見つかりません。削除を直接試みます...`);
+    }
+
+    // ダイアログ内の行を再取得して削除対象を探す
+    const rows2 = page.locator('div[data-role="list-item"][data-title]');
+    const count2 = await rows2.count().catch(() => 0);
+
+    let deleted = false;
+    for (let i = 0; i < count2; i++) {
+      const row = rows2.nth(i);
+      const dataTitle = ((await row.getAttribute("data-title").catch(() => "")) || "").trim();
+      if (!isManagedListName(dataTitle, prefix)) continue;
+
+      console.log(`[delete] "${dataTitle}" を削除中... (row index ${i})`);
+
       await row.scrollIntoViewIfNeeded().catch(() => {});
       await row.hover({ force: true }).catch(() => {});
       await page.waitForTimeout(800);
 
       const deleteBtn = await findVisibleDeleteButtonWithin(row);
       if (!deleteBtn) {
-        // サイドバー要素と誤マッチした可能性があるため次の行を試す
         console.log(`[delete] row ${i} に削除ボタンなし。次の行を試します...`);
         continue;
       }
@@ -751,13 +786,6 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
       await page.waitForTimeout(1200);
       deleted = true;
       break;
-    }
-
-    if (!anyMatch) {
-      console.log(`[delete] 対象なし: "${prefix}"`);
-      await closeOpenListDialogIfVisible(page).catch(() => {});
-      await closeAnyMenu(page);
-      return;
     }
 
     if (!deleted) {
