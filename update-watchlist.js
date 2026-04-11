@@ -762,19 +762,29 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
       return;
     }
 
-    // 削除対象がアクティブな状態だとゴミ箱アイコンが表示されない。
-    // 非管理対象ウォッチリストをクリックしてアクティブを切り替えてから
-    // ダイアログを再オープンする。
-    if (nonManagedTitle) {
-      console.log(`[delete] 非管理対象 "${nonManagedTitle}" に一時切り替え（アクティブ解除）...`);
-      const nonManagedRow = page.locator(`div[data-role="list-item"][data-title="${nonManagedTitle}"]`).first();
-      await nonManagedRow.click({ force: true });
-      await page.waitForTimeout(1500);
-      // クリック後にダイアログが閉じた場合は再オープンする
-      await openListOpenDialog(page);
-    } else {
-      console.log(`[delete] 非管理対象が見つかりません。削除を直接試みます...`);
+    if (!nonManagedTitle) {
+      // 非管理対象がない = 管理対象しか存在しない（最後の1つは TradingView が削除を許可しない）
+      console.log(`[delete] 警告: 非管理対象ウォッチリストが見つからないため "${prefix}" の削除をスキップします。`);
+      await closeOpenListDialogIfVisible(page).catch(() => {});
+      await closeAnyMenu(page);
+      return;
     }
+
+    // ダイアログを閉じてから switchWatchlistTo で確実に非管理対象へ切り替える。
+    // （ダイアログが開いたままのクリックでは active が変わらない場合があるため）
+    await closeOpenListDialogIfVisible(page).catch(() => {});
+    await closeAnyMenu(page);
+
+    const currentTitle = await getCurrentWatchlistTitle(page).catch(() => "");
+    if (currentTitle !== nonManagedTitle) {
+      console.log(`[delete] "${nonManagedTitle}" に切り替えて管理対象をアクティブ解除...`);
+      await switchWatchlistTo(page, nonManagedTitle);
+    } else {
+      console.log(`[delete] "${nonManagedTitle}" は既にアクティブ。`);
+    }
+
+    // ダイアログを再オープン（管理対象が非アクティブ → ゴミ箱アイコンが表示される）
+    await openListOpenDialog(page);
 
     // ダイアログ内の行を再取得して削除対象を探す
     const rows2 = page.locator('div[data-role="list-item"][data-title]');
