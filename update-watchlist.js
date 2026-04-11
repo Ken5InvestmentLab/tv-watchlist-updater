@@ -737,8 +737,8 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     const count = await rows.count().catch(() => 0);
     console.log(`[delete] Dialog rows found (round ${round}): ${count}`);
 
-    let targetRow = null;
-    let targetName = "";
+    let anyMatch = false;
+    let deleted = false;
 
     for (let i = 0; i < count; i++) {
       const row = rows.nth(i);
@@ -747,37 +747,45 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
       const text = dataTitle || fallbackText;
 
       if (!isManagedListName(text, prefix)) continue;
-      targetName = text;
-      targetRow = rows.nth(i);
+      anyMatch = true;
+
+      console.log(`[delete] "${text}" を削除中... (row index ${i})`);
+
+      // ホバーしてゴミ箱アイコンを表示
+      await row.scrollIntoViewIfNeeded().catch(() => {});
+      await row.hover({ force: true }).catch(() => {});
+      await page.waitForTimeout(800);
+
+      const deleteBtn = await findVisibleDeleteButtonWithin(row);
+      if (!deleteBtn) {
+        // サイドバー要素と誤マッチした可能性があるため次の行を試す
+        console.log(`[delete] row ${i} に削除ボタンなし。次の行を試します...`);
+        continue;
+      }
+
+      await deleteBtn.click({ force: true });
+      await page.waitForTimeout(500);
+      await confirmTradingViewDialog(page);
+      await page.waitForTimeout(1200);
+      deleted = true;
       break;
     }
 
-    if (!targetRow) {
+    if (!anyMatch) {
       console.log(`[delete] 対象なし: "${prefix}"`);
       await closeOpenListDialogIfVisible(page).catch(() => {});
       await closeAnyMenu(page);
       return;
     }
 
-    console.log(`[delete] "${targetName}" を削除中...`);
-
-    // ホバーしてゴミ箱アイコンを表示
-    await targetRow.hover().catch(() => {});
-    await page.waitForTimeout(500);
-
-    const deleteBtn = await findVisibleDeleteButtonWithin(targetRow);
-    if (!deleteBtn) {
-      await safeScreenshot(page, `delete_btn_not_found_${targetName}`);
-      throw new Error(`削除ボタン（ゴミ箱）が見つかりません: ${targetName}`);
+    if (!deleted) {
+      await safeScreenshot(page, `delete_btn_not_found_${prefix}`);
+      throw new Error(`削除ボタン（ゴミ箱）が全行で見つかりませんでした: ${prefix}`);
     }
-
-    await deleteBtn.click({ force: true });
-    await page.waitForTimeout(500);
-    await confirmTradingViewDialog(page);
-    await page.waitForTimeout(1200);
   }
 
   throw new Error(`削除ループが上限に達しました: ${prefix}`);
+}
 }
 
 async function confirmTradingViewDialog(page) {
