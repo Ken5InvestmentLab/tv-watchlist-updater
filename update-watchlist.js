@@ -167,7 +167,7 @@ async function findVisibleDeleteButtonWithin(scope, page = null) {
 // ==============================
 
 async function getWatchlistButton(page) {
-  // 1. data-name 属性（最も信頼できる）
+  // 1. data-name 属性（最も信頼できる - パネルが開いているときのみ表示）
   const dataNameBtn = page.locator('button[data-name="watchlists-button"]').first();
   if (await dataNameBtn.isVisible().catch(() => false)) return dataNameBtn;
 
@@ -175,11 +175,11 @@ async function getWatchlistButton(page) {
   const roleBtn = page.getByRole('button', { name: /ウォッチリスト|Watchlist/i }).first();
   if (await roleBtn.isVisible().catch(() => false)) return roleBtn;
 
-  // 3. aria-label や title
+  // 3. aria-label や title (部分一致)
   const attrBtn = page.locator('button[aria-label*="ウォッチリスト"], button[aria-label*="Watchlist"], button[title*="ウォッチリスト"], button[title*="Watchlist"]').first();
   if (await attrBtn.isVisible().catch(() => false)) return attrBtn;
 
-  // 4. data-tooltip
+  // 4. data-tooltip (部分一致)
   const tooltipBtn = page.locator('button[data-tooltip*="ウォッチリスト"], button[data-tooltip*="Watchlist"]').first();
   if (await tooltipBtn.isVisible().catch(() => false)) return tooltipBtn;
 
@@ -187,10 +187,32 @@ async function getWatchlistButton(page) {
   const classBtn = page.locator('button[class*="watchlist"], button[class*="Watchlist"]').first();
   if (await classBtn.isVisible().catch(() => false)) return classBtn;
 
-  // 6. 最終手段: SVG アイコンの親ボタン
-  const svgBtn = page.locator('svg').locator('xpath=ancestor::button').first();
-  if (await svgBtn.isVisible().catch(() => false)) return svgBtn;
+  // SVG フォールバックは廃止（マッチが広すぎてランダムなボタンを返すリスクがある）
 
+  return null;
+}
+
+// ウォッチリストパネルのサイドバートグルボタンを取得（パネル開閉専用）
+async function getWatchlistToggleButton(page) {
+  const candidates = [
+    // aria-label 部分一致（日本語・英語）
+    page.locator('button[aria-label*="ウォッチリスト"]').first(),
+    page.locator('button[aria-label*="Watchlist"]').first(),
+    // data-tooltip 部分一致
+    page.locator('button[data-tooltip*="ウォッチリスト"]').first(),
+    page.locator('button[data-tooltip*="Watchlist"]').first(),
+    // title 部分一致
+    page.locator('button[title*="ウォッチリスト"]').first(),
+    page.locator('button[title*="Watchlist"]').first(),
+    // data-name による推測（TradingView UIバリエーション）
+    page.locator('[data-name*="watchlist"]:not([data-name="watchlists-button"])').first(),
+    // ロール + テキスト
+    page.getByRole('button', { name: /ウォッチリスト|Watchlist/i }).first(),
+  ];
+
+  for (const c of candidates) {
+    if (await c.isVisible().catch(() => false)) return c;
+  }
   return null;
 }
 
@@ -343,21 +365,26 @@ async function getCurrentWatchlistTitle(page) {
   return tokens[0] || "";
 }
 
-// パネルが開いているか（aria-pressed または実際のリスト要素で判定）
+// パネルが開いているか（複数の方法で判定）
 async function isWatchlistPanelReady(page) {
-  // 方法1: ボタンの aria-pressed 属性
-  const btn = await getWatchlistButton(page);
-  if (btn) {
-    const pressed = await btn.getAttribute('aria-pressed');
+  // 方法1: パネル内のドロップダウンボタン（最も確実）
+  const dropdownBtn = page.locator('button[data-name="watchlists-button"]').first();
+  if (await dropdownBtn.isVisible().catch(() => false)) return true;
+
+  // 方法2: サイドバートグルボタンの aria-pressed 属性
+  const toggleBtn = await getWatchlistToggleButton(page);
+  if (toggleBtn) {
+    const pressed = await toggleBtn.getAttribute('aria-pressed');
     if (pressed === 'true') return true;
   }
 
-  // 方法2: パネル内の実際の要素
+  // 方法3: パネル内の具体的な要素（より特定性の高いセレクタを優先）
   const panelIndicators = [
-    'div[data-role="list"]',               // リストコンテナ
     'div[data-name="watchlist-list"]',
+    'div[data-role="list"]',
+    '[data-widget-type="watchlist"]',
+    '[data-name="watchlist-widget"]',
     '[role="tabpanel"]',
-    'div[class*="watchlist"]',
   ];
 
   for (const sel of panelIndicators) {
@@ -373,33 +400,24 @@ async function isWatchlistPanelReady(page) {
 async function openWatchlistPanel(page) {
   if (await isWatchlistPanelReady(page)) return;
 
-  const btn = await getWatchlistButton(page);
-  if (!btn) {
+  // パネル開閉専用のトグルボタンを使用（パネル内のドロップダウンと混同しない）
+  const toggleBtn = await getWatchlistToggleButton(page);
+  if (!toggleBtn) {
     await safeScreenshot(page, "watchlist_button_not_found");
-    throw new Error("ウォッチリストボタンが見つかりません");
+    throw new Error("ウォッチリストパネルのトグルボタンが見つかりません");
   }
 
-  // クリック前の状態
-  const beforePressed = await btn.getAttribute('aria-pressed');
+  await toggleBtn.click({ force: true });
+  await page.waitForTimeout(1000);
 
-  await btn.click({ force: true });
-  await page.waitForTimeout(500);
-
-  // aria-pressed が 'true' になるのを待機（最大5秒）
-  try {
-    await page.waitForFunction(
-      (button) => button.getAttribute('aria-pressed') === 'true',
-      btn,
-      { timeout: 5000 }
-    );
-  } catch (e) {
-    // 属性変化がなくてもパネルが表示されていればOK
-    if (!await isWatchlistPanelReady(page)) {
-      throw new Error("ウォッチリストパネルが開きませんでした");
-    }
+  // ポーリングでパネルの表示を確認（最大8秒）
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    if (await isWatchlistPanelReady(page)) return;
+    await page.waitForTimeout(400);
   }
 
-  await page.waitForTimeout(800);
+  throw new Error("ウォッチリストパネルが開きませんでした");
 }
 
 async function ensureWatchlistPanelOpen(page) {
@@ -444,9 +462,9 @@ async function waitForTradingViewReady(page) {
     throw new Error("TradingViewのUIが読み込まれませんでした");
   }
 
-  // ウォッチリストボタンが表示されるのを待つ
-  const btn = await getWatchlistButton(page);
-  if (!btn) {
+  // ウォッチリストのトグルボタンが表示されるのを待つ（サイドバーボタン）
+  const toggleBtn = await getWatchlistToggleButton(page);
+  if (!toggleBtn) {
     await safeScreenshot(page, "watchlist_button_missing");
     throw new Error("ウォッチリストボタンが見つかりません（タイムアウト）");
   }
