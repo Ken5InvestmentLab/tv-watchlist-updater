@@ -250,6 +250,11 @@ async function handleUnexpectedDialogs(page) {
     await fill4HInChangeIntervalDialog(page);
     return true;
   }
+  // オファー / フラッシュセール ポップアップ
+  if (await isOfferPopupVisible(page)) {
+    await closeOfferPopup(page);
+    return true;
+  }
   // ウォッチリストのプロモーション
   if (await isWatchlistPromoDialogVisible(page)) {
     await closeWatchlistPromoDialog(page);
@@ -1554,6 +1559,66 @@ async function openWatchlistMenuHard(page, retryCount = 8) {
   throw new Error('ウォッチリストメニューを規定回数内に開けませんでした。判定用セレクタが正しいか再確認が必要です。');
 }
 // ==============================
+// Offer / Flash sale popup (site-wide promotion dialog)
+// ==============================
+async function isOfferPopupVisible(page) {
+  const markers = [
+    page.getByText(/Don't miss this/i).first(),
+    page.getByText(/Flash sale/i).first(),
+    page.getByText(/Up to \d+% off/i).first(),
+    page.getByText(/Explore offers/i).first(),
+  ];
+
+  let hitCount = 0;
+  for (const marker of markers) {
+    if (await marker.isVisible().catch(() => false)) hitCount++;
+  }
+
+  return hitCount >= 2;
+}
+
+async function closeOfferPopup(page) {
+  // Try specific selectors first, then fall back to generic close buttons
+  const closeCandidates = [
+    page.locator('button[data-qa-id="close"]').first(),
+    page.locator('button[aria-label="Close"]').first(),
+    page.locator('button[aria-label="閉じる"]').first(),
+    // Close button near the flash sale text (look inside the ancestor dialog/modal)
+    page.getByText(/Don't miss this/i).first()
+      .locator('xpath=ancestor::*[contains(@class,"dialog") or contains(@class,"modal") or contains(@class,"popup")][1]//button')
+      .first(),
+    page.getByRole("button", { name: /閉じる|Close/i }).first(),
+  ];
+
+  for (const btn of closeCandidates) {
+    const visible = await btn.isVisible().catch(() => false);
+    if (!visible) continue;
+
+    const clicked = await clickBestEffort(btn, 5000);
+    if (clicked) {
+      await page.waitForTimeout(800);
+      const stillVisible = await isOfferPopupVisible(page);
+      if (!stillVisible) {
+        console.log("[offer-popup] offer popup closed");
+        return true;
+      }
+    }
+  }
+
+  // Last resort: press Escape
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(800);
+  const stillVisible = await isOfferPopupVisible(page);
+  if (!stillVisible) {
+    console.log("[offer-popup] offer popup closed via Escape");
+    return true;
+  }
+
+  console.warn("[offer-popup] could not close offer popup");
+  return false;
+}
+
+// ==============================
 // Watchlist alert promo dialog
 // ==============================
 async function isWatchlistPromoDialogVisible(page) {
@@ -2636,6 +2701,13 @@ async function dumpAlertTickerTexts(page) {
     await page.goto("https://www.tradingview.com/chart/", { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle").catch(() => { });
     await waitForTradingViewReady(page);  // 新しい関数を使用
+
+    // オファー / フラッシュセール ポップアップを proactive に閉じる
+    if (await isOfferPopupVisible(page)) {
+      console.log("[offer-popup] offer popup detected on page load, closing...");
+      await safeScreenshot(page, "offer_popup_detected");
+      await closeOfferPopup(page);
+    }
 
     // ログイン状態確認（必要に応じて）
     const needLogin = await page.getByText(/Sign in|ログイン/i).first().isVisible().catch(() => false);
