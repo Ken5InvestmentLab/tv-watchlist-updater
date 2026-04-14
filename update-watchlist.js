@@ -1578,39 +1578,112 @@ async function isOfferPopupVisible(page) {
 }
 
 async function closeOfferPopup(page) {
-  // Try specific selectors first, then fall back to generic close buttons
-  const closeCandidates = [
-    page.locator('button[data-qa-id="close"]').first(),
-    page.locator('button[aria-label="Close"]').first(),
-    page.locator('button[aria-label="閉じる"]').first(),
-    // Close button near the flash sale text (look inside the ancestor dialog/modal)
-    page.getByText(/Don't miss this/i).first()
-      .locator('xpath=ancestor::*[contains(@class,"dialog") or contains(@class,"modal") or contains(@class,"popup")][1]//button')
-      .first(),
-    page.getByRole("button", { name: /閉じる|Close/i }).first(),
-  ];
+  // Strategy 1: JavaScript — find close button by SVG X-path geometry or
+  // CSS-module class prefix "closeButton" scoped to the popup container.
+  // Both are stable across TradingView UI updates:
+  //   • The X-shape SVG path "m1.5 1.5 21 21m0-21-21 21" is geometric constant
+  //   • CSS-module class names hash the suffix but keep the prefix (closeButton-*)
+  const strategy1 = await page.evaluate(() => {
+    // Walk up from any element that contains the offer popup text to find the
+    // shallowest ancestor that also contains the close button.
+    const offerKeywords = ["Flash sale", "Don't miss this", "Up to", "Explore offers"];
+    const allText = document.querySelectorAll('*');
+    let popupRoot = null;
 
-  for (const btn of closeCandidates) {
-    const visible = await btn.isVisible().catch(() => false);
-    if (!visible) continue;
+    for (const el of allText) {
+      if (el.children.length === 0) continue; // skip leaf text nodes
+      if (el.children.length > 50) continue;  // skip huge containers
+      const t = el.textContent || '';
+      if (offerKeywords.filter(k => t.includes(k)).length >= 2) {
+        popupRoot = el;
+        break;
+      }
+    }
 
+    // Walk up to find the first ancestor that has a closeButton-* class button
+    let container = popupRoot;
+    while (container && container !== document.body) {
+      const closeBtn = container.querySelector('button[class*="closeButton"]');
+      if (closeBtn) {
+        const rect = closeBtn.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          return 'closeButton-class';
+        }
+      }
+      container = container.parentElement;
+    }
+
+    // Fallback within JS: any visible button whose SVG path draws an X shape
+    const xPathFragments = ['1.5 1.5 21 21', '21m0-21-21 21', 'm1.5 1.5'];
+    for (const btn of document.querySelectorAll('button')) {
+      for (const path of btn.querySelectorAll('svg path')) {
+        const d = path.getAttribute('d') || '';
+        if (xPathFragments.some(f => d.includes(f))) {
+          const rect = btn.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            return 'svg-x-path';
+          }
+        }
+      }
+    }
+    return null;
+  });
+
+  if (strategy1) {
+    await page.waitForTimeout(800);
+    if (!(await isOfferPopupVisible(page))) {
+      console.log(`[offer-popup] offer popup closed via JS (${strategy1})`);
+      return true;
+    }
+  }
+
+  // Strategy 2: Playwright CSS selector — class prefix match
+  for (const sel of [
+    'button[class*="closeButton"]',
+    'button[data-qa-id="close"]',
+    'button[aria-label="Close"]',
+    'button[aria-label="閉じる"]',
+  ]) {
+    const btn = page.locator(sel).first();
+    if (!(await btn.isVisible().catch(() => false))) continue;
     const clicked = await clickBestEffort(btn, 5000);
     if (clicked) {
       await page.waitForTimeout(800);
-      const stillVisible = await isOfferPopupVisible(page);
-      if (!stillVisible) {
-        console.log("[offer-popup] offer popup closed");
+      if (!(await isOfferPopupVisible(page))) {
+        console.log(`[offer-popup] offer popup closed via selector: ${sel}`);
         return true;
       }
     }
   }
 
-  // Last resort: press Escape
+  // Strategy 3: Playwright :has() with SVG path geometry
+  const bySvg = page.locator('button:has(svg path[d*="1.5 1.5 21 21"])').first();
+  if (await bySvg.isVisible().catch(() => false)) {
+    const clicked = await clickBestEffort(bySvg, 5000);
+    if (clicked) {
+      await page.waitForTimeout(800);
+      if (!(await isOfferPopupVisible(page))) {
+        console.log("[offer-popup] offer popup closed via SVG path :has() selector");
+        return true;
+      }
+    }
+  }
+
+  // Strategy 4: Escape key
   await page.keyboard.press("Escape");
   await page.waitForTimeout(800);
-  const stillVisible = await isOfferPopupVisible(page);
-  if (!stillVisible) {
+  if (!(await isOfferPopupVisible(page))) {
     console.log("[offer-popup] offer popup closed via Escape");
+    return true;
+  }
+
+  // Strategy 5: Click outside the popup (backdrop area – top-left corner)
+  await page.mouse.click(10, 10);
+  await page.waitForTimeout(800);
+  if (!(await isOfferPopupVisible(page))) {
+    console.log("[offer-popup] offer popup closed via backdrop click");
     return true;
   }
 
