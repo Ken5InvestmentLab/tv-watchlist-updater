@@ -13,6 +13,7 @@ jobs:
       contents: write
       issues: write
       actions: read
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@v4
@@ -87,6 +88,7 @@ jobs:
 
       - name: Create auto-fix issue
         if: steps.check.outputs.existing == '0'
+        id: create-issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
@@ -115,7 +117,75 @@ jobs:
           EOF
           )
 
-          gh issue create \
+          ISSUE_URL=$(gh issue create \
             --title "[auto-fix] ワークフロー失敗: ${RUN_BRANCH}" \
             --label "auto-fix-needed" \
-            --body "${BODY}"
+            --body "${BODY}")
+
+          ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -oE '[0-9]+$')
+          echo "issue_number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Create diagnostic PR for Routines trigger
+        if: steps.check.outputs.existing == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+
+          # スクリーンショットステップ後のブランチ状態をリセットしてmainに戻る
+          git fetch origin main
+          git checkout main
+
+          BRANCH_NAME="auto-fix/run-${RUN_ID}"
+
+          # 既存ブランチがあれば重複作成をスキップ
+          if git ls-remote --exit-code origin "${BRANCH_NAME}" >/dev/null 2>&1; then
+            echo "Branch ${BRANCH_NAME} already exists, skipping PR creation"
+            exit 0
+          fi
+
+          git checkout -b "${BRANCH_NAME}"
+
+          # Routinesトリガー用のマーカーファイルを作成
+          mkdir -p .github
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          printf '{"run_id":"%s","timestamp":"%s"}\n' "${RUN_ID}" "${TIMESTAMP}" \
+            > .github/auto-fix-trigger.json
+
+          git add .github/auto-fix-trigger.json
+          git commit -m "auto-fix: trigger for run ${RUN_ID}"
+          git push origin "${BRANCH_NAME}"
+
+          PR_BODY=$(cat <<EOF
+          ## 自動修正トリガー (Claude Code Routines)
+
+          このPRはClaude Code Routinesを起動するためのトリガーです。
+          **⚠️ マージしないでください。修正完了後に自動でクローズされます。**
+
+          ---
+
+          **失敗したワークフロー:** ${RUN_URL}
+          **Issue:** #${ISSUE_NUMBER}
+
+          ## Claude Code 対応手順
+          1. Issue #${ISSUE_NUMBER} のエラーログを確認
+          2. \`debug/screenshots\` ブランチの \`.debug/\` フォルダのスクリーンショットを確認
+          3. \`update-watchlist.js\` を修正
+          4. \`claude/nifty-pascal-Z5aiC\` ブランチにコミット・プッシュ → main にマージ
+          5. \`TV Watchlist Update (Playwright)\` ワークフローを再実行して成功を確認
+          6. このPRをクローズ、Issue #${ISSUE_NUMBER} をクローズ
+          EOF
+          )
+
+          gh pr create \
+            --title "[auto-fix] ワークフロー失敗: ${RUN_BRANCH}" \
+            --body "${PR_BODY}" \
+            --base main \
+            --head "${BRANCH_NAME}" \
+            --label "auto-fix-needed" \
+            2>/dev/null || echo "::warning::PR creation failed (may already exist)"
