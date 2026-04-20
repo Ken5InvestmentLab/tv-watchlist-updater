@@ -2688,8 +2688,33 @@ async function addIndicatorToChart(page, indicatorName) {
   await closeAnyMenu(page);
   await page.waitForTimeout(300);
 
-  // Open Indicators panel
+  // Broad selector covering current and past TradingView indicator search inputs
+  const SEARCH_INPUT_SELECTOR = [
+    'input[data-role="search"]',
+    'input[placeholder*="Search" i]',
+    'input[placeholder*="検索"]',
+    'input[placeholder*="インジケーター"]',
+    'input[placeholder*="indicator" i]',
+    'input[placeholder*="ストラテジー"]',
+    'input[placeholder*="find" i]',
+  ].join(', ');
+
+  const isSearchPanelOpen = async () =>
+    page.locator(SEARCH_INPUT_SELECTOR).first().isVisible().catch(() => false);
+
+  // Poll up to maxMs for the search panel to appear
+  const waitForSearchPanel = async (maxMs = 2000) => {
+    const step = 200;
+    for (let elapsed = 0; elapsed < maxMs; elapsed += step) {
+      if (await isSearchPanelOpen()) return true;
+      await page.waitForTimeout(step);
+    }
+    return false;
+  };
+
+  // Open Indicators panel — ordered by specificity / recency
   const panelBtnCandidates = [
+    page.locator('[data-name="open-indicators-dialog"]').first(),
     page.locator('[data-qa-id="header-toolbar-indicators"]').first(),
     page.locator('[data-name="header-toolbar-indicators"]').first(),
     page.locator('button[aria-label*="インジケーター"]').first(),
@@ -2702,14 +2727,20 @@ async function addIndicatorToChart(page, indicatorName) {
   for (const btn of panelBtnCandidates) {
     if (!(await btn.isVisible().catch(() => false))) continue;
     if (!(await safeClick(btn, { timeout: 5000, force: true }))) continue;
-    await page.waitForTimeout(800);
-    const searchInput = page.locator(
-      'input[data-role="search"], input[placeholder*="Search" i], input[placeholder*="検索"]'
-    ).first();
-    if (await searchInput.isVisible().catch(() => false)) {
-      panelOpened = true;
-      break;
-    }
+    console.log(`[indicator] Clicked indicator button, waiting for search panel...`);
+    panelOpened = await waitForSearchPanel(2000);
+    if (panelOpened) break;
+  }
+
+  // Fallback: keyboard shortcut '/' (TradingView built-in)
+  if (!panelOpened) {
+    console.log(`[indicator] Button candidates failed, trying '/' shortcut`);
+    // Click chart canvas to ensure keyboard focus is on the chart
+    const chartCanvas = page.locator('canvas').first();
+    await chartCanvas.click({ force: true }).catch(() => {});
+    await page.waitForTimeout(200);
+    await page.keyboard.press('/');
+    panelOpened = await waitForSearchPanel(2000);
   }
 
   if (!panelOpened) {
@@ -2718,9 +2749,7 @@ async function addIndicatorToChart(page, indicatorName) {
   }
 
   // Type indicator name in search box
-  const searchInput = page.locator(
-    'input[data-role="search"], input[placeholder*="Search" i], input[placeholder*="検索"]'
-  ).first();
+  const searchInput = page.locator(SEARCH_INPUT_SELECTOR).first();
   await searchInput.fill(indicatorName);
   await page.waitForTimeout(1500);
 
