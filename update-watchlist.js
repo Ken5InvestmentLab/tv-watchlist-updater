@@ -93,7 +93,7 @@ async function safeScreenshot(page, label) {
   try {
     ensureDir(WORKDIR);
     const p = path.join(WORKDIR, `screenshot_${Date.now()}_${label}.png`);
-    await page.screenshot({ path: p, fullPage: true });
+    await page.screenshot({ path: p });
     console.log("Saved screenshot:", p);
   } catch (e) {
     console.log("Screenshot failed:", e?.message || e);
