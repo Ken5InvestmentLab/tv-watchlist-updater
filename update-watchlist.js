@@ -22,6 +22,7 @@ const ALERT_CONDITION_NAME =
   process.env.ALERT_CONDITION_NAME ||
   "天底極致 - 通常モード Alert用 (20, 2, 12, 75, 35, 0.18, 5, 2.5)";
 const ALERT_TIMEFRAME_LABEL = process.env.ALERT_TIMEFRAME_LABEL || "4 時間";
+const ALERT_INDICATOR_SCRIPT_NAME = process.env.ALERT_INDICATOR_SCRIPT_NAME || "天底極致 - 通常モード 4H Alert Core";
 
 const NAV_TIMEOUT = 90000;
 const STEP_TIMEOUT = 45000;
@@ -2643,6 +2644,159 @@ async function assertManagedAlertCreated(page, listName) {
   }
 }
 
+// ==============================
+// Indicator management
+// ==============================
+
+async function isIndicatorOnChart(page, indicatorName) {
+  const shortName = indicatorName.split('(')[0].trim();
+
+  // Method 1: Playwright locators on legend elements (stable data-name attributes)
+  const legendSelectors = [
+    '[data-name="legend-source-title"]',
+    '[data-name="legend-source-item"]',
+    '[data-name="pane-legend-line"]',
+    '[class*="legendSourceTitle"]',
+    '[class*="legendTitle"]',
+  ];
+  for (const sel of legendSelectors) {
+    try {
+      const el = page.locator(sel).filter({ hasText: shortName }).first();
+      if (await el.isVisible().catch(() => false)) {
+        console.log(`[indicator] found via selector "${sel}"`);
+        return true;
+      }
+    } catch { /* ignore invalid selector */ }
+  }
+
+  // Method 2: JS evaluate — scan all legend/pane elements for the name
+  const found = await page.evaluate((name) => {
+    const areas = document.querySelectorAll(
+      '[class*="legend"], [class*="pane-legend"], [data-name*="legend"]'
+    );
+    for (const el of areas) {
+      if ((el.textContent || '').includes(name)) return true;
+    }
+    return false;
+  }, shortName).catch(() => false);
+
+  return found;
+}
+
+async function addIndicatorToChart(page, indicatorName) {
+  console.log(`[indicator] Adding indicator: "${indicatorName}"`);
+  await closeAnyMenu(page);
+  await page.waitForTimeout(300);
+
+  // Open Indicators panel
+  const panelBtnCandidates = [
+    page.locator('[data-qa-id="header-toolbar-indicators"]').first(),
+    page.locator('[data-name="header-toolbar-indicators"]').first(),
+    page.locator('button[aria-label*="インジケーター"]').first(),
+    page.locator('button[aria-label*="Indicators" i]').first(),
+    page.locator('button[aria-label*="Indicator" i]').first(),
+    page.getByText(/^インジケーター$|^Indicators$/).first(),
+  ];
+
+  let panelOpened = false;
+  for (const btn of panelBtnCandidates) {
+    if (!(await btn.isVisible().catch(() => false))) continue;
+    if (!(await safeClick(btn, { timeout: 5000, force: true }))) continue;
+    await page.waitForTimeout(800);
+    const searchInput = page.locator(
+      'input[data-role="search"], input[placeholder*="Search" i], input[placeholder*="検索"]'
+    ).first();
+    if (await searchInput.isVisible().catch(() => false)) {
+      panelOpened = true;
+      break;
+    }
+  }
+
+  if (!panelOpened) {
+    await safeScreenshot(page, 'indicator_panel_not_opened');
+    throw new Error(`インジケーターパネルを開けませんでした: "${indicatorName}"`);
+  }
+
+  // Type indicator name in search box
+  const searchInput = page.locator(
+    'input[data-role="search"], input[placeholder*="Search" i], input[placeholder*="検索"]'
+  ).first();
+  await searchInput.fill(indicatorName);
+  await page.waitForTimeout(1500);
+
+  // Click the matching search result
+  const shortName = indicatorName.split('(')[0].trim();
+  const resultCandidates = [
+    page.locator('[data-name="item-name"]').filter({ hasText: indicatorName }).first(),
+    page.locator('[data-name="item-name"]').filter({ hasText: shortName }).first(),
+    page.locator('[class*="listItem"]').filter({ hasText: indicatorName }).first(),
+    page.locator('[class*="listItem"]').filter({ hasText: shortName }).first(),
+    page.locator('[class*="item"]').filter({ hasText: indicatorName }).first(),
+    page.getByRole('listitem').filter({ hasText: indicatorName }).first(),
+    page.getByRole('listitem').filter({ hasText: shortName }).first(),
+    page.getByText(shortName, { exact: false }).first(),
+  ];
+
+  let added = false;
+  for (const candidate of resultCandidates) {
+    if (!(await candidate.isVisible().catch(() => false))) continue;
+    if (await safeClick(candidate, { timeout: 5000, force: true })) {
+      added = true;
+      console.log(`[indicator] Clicked result for: "${indicatorName}"`);
+      break;
+    }
+  }
+
+  // Close the panel (Escape + close button fallback)
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(800);
+  const closeBtn = page.locator(
+    'button[data-qa-id="close"], button[aria-label="Close"], button[aria-label="閉じる"]'
+  ).first();
+  if (await closeBtn.isVisible().catch(() => false)) {
+    await closeBtn.click().catch(() => {});
+    await page.waitForTimeout(500);
+  }
+
+  if (!added) {
+    await safeScreenshot(page, 'indicator_result_not_found');
+    throw new Error(`インジケーターが検索結果に見つかりませんでした: "${indicatorName}"`);
+  }
+
+  await page.waitForTimeout(2000);
+  console.log(`[indicator] Indicator "${indicatorName}" added to chart`);
+}
+
+async function ensureIndicatorOnChart(page, indicatorName) {
+  if (!indicatorName) return;
+  console.log(`[indicator] Checking if "${indicatorName}" is on chart`);
+
+  if (await isIndicatorOnChart(page, indicatorName)) {
+    console.log(`[indicator] Already on chart: "${indicatorName}"`);
+    return;
+  }
+
+  console.log(`[indicator] Not found on chart, adding: "${indicatorName}"`);
+  await safeScreenshot(page, 'before_add_indicator');
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await addIndicatorToChart(page, indicatorName);
+      if (await isIndicatorOnChart(page, indicatorName)) {
+        console.log(`[indicator] Confirmed on chart after add: "${indicatorName}"`);
+        return;
+      }
+      console.warn(`[indicator] Attempt ${attempt}: added but not yet visible`);
+    } catch (err) {
+      console.warn(`[indicator] Attempt ${attempt} failed: ${err.message}`);
+      if (attempt < 2) await page.waitForTimeout(1500);
+    }
+  }
+
+  // Don't throw — let selectAlertCondition fail with the original error if the indicator truly isn't available
+  console.warn(`[indicator] Could not confirm "${indicatorName}" on chart. Proceeding anyway.`);
+}
+
 async function createWatchlistAlertIfPossible(page, listName) {
   console.log("Creating alert for:", listName);
 
@@ -2651,6 +2805,9 @@ async function createWatchlistAlertIfPossible(page, listName) {
     await page.waitForTimeout(4000);
 
     await ensureChartTimeframe(page, ALERT_TIMEFRAME_LABEL || "4 時間");
+
+    // インジケーターがチャートに設定されていない場合は追加する
+    await ensureIndicatorOnChart(page, ALERT_INDICATOR_SCRIPT_NAME);
 
     const chartTf = await getCurrentChartTimeframeText(page);
     console.log(`[alert] chart timeframe before create: "${chartTf}"`);
