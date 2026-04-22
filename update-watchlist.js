@@ -2697,10 +2697,35 @@ async function addIndicatorToChart(page, indicatorName) {
     'input[placeholder*="indicator" i]',
     'input[placeholder*="ストラテジー"]',
     'input[placeholder*="find" i]',
+    'input[placeholder*="指標"]',
+    'input[placeholder*="metrics" i]',
+    'input[placeholder*="strategies" i]',
+    'input[placeholder*="Indicators" i]',
   ].join(', ');
 
-  const isSearchPanelOpen = async () =>
-    page.locator(SEARCH_INPUT_SELECTOR).first().isVisible().catch(() => false);
+  // Container selectors for the indicators dialog panel
+  const INDICATOR_PANEL_SELECTORS = [
+    '[data-name="indicators-dialog"]',
+    '[data-qa-id="indicators-dialog"]',
+    '[data-id="indicators-dialog"]',
+  ].join(', ');
+
+  const isSearchPanelOpen = async () => {
+    if (await page.locator(SEARCH_INPUT_SELECTOR).first().isVisible().catch(() => false)) return true;
+    // Fallback: check if the indicators dialog container is visible
+    if (await page.locator(INDICATOR_PANEL_SELECTORS).first().isVisible().catch(() => false)) return true;
+    // Last resort: scan DOM for the panel title text
+    return page.evaluate(() => {
+      const titles = [
+        'Indicators, metrics, and strategies',
+        'インジケーター、指標、ストラテジー',
+        'インジケーター・指標・ストラテジー',
+      ];
+      return [...document.querySelectorAll('div, span, h1, h2')].some(
+        el => titles.some(t => el.textContent?.trim() === t) && el.offsetParent !== null
+      );
+    }).catch(() => false);
+  };
 
   // Poll up to maxMs for the search panel to appear
   const waitForSearchPanel = async (maxMs = 2000) => {
@@ -2749,7 +2774,28 @@ async function addIndicatorToChart(page, indicatorName) {
   }
 
   // Type indicator name in search box
-  const searchInput = page.locator(SEARCH_INPUT_SELECTOR).first();
+  let searchInput = page.locator(SEARCH_INPUT_SELECTOR).first();
+  if (!(await searchInput.isVisible().catch(() => false))) {
+    // Panel detected via container/title but standard input selectors don't match.
+    // Try progressively broader selectors to find the search input.
+    const inputFallbacks = [
+      page.locator(`${INDICATOR_PANEL_SELECTORS} input`).first(),
+      page.locator('[role="dialog"]').filter({ hasText: /indicators|インジケーター|metrics|指標/i }).locator('input').first(),
+      page.locator('[class*="dialog"]').filter({ hasText: /indicators|インジケーター/i }).locator('input').first(),
+      page.locator('[class*="Dialog"]').filter({ hasText: /indicators|インジケーター/i }).locator('input').first(),
+    ];
+    for (const inp of inputFallbacks) {
+      if (await inp.isVisible().catch(() => false)) {
+        searchInput = inp;
+        console.log(`[indicator] Found search input via fallback selector`);
+        break;
+      }
+    }
+  }
+  if (!(await searchInput.isVisible().catch(() => false))) {
+    await safeScreenshot(page, 'indicator_search_input_not_found');
+    throw new Error(`インジケーター検索入力が見つかりませんでした: "${indicatorName}"`);
+  }
   await searchInput.fill(indicatorName);
   await page.waitForTimeout(1500);
 
