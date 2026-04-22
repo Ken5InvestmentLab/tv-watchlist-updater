@@ -1,0 +1,23 @@
+name: Trigger TV Watchlist Update
+
+on:
+  push:
+    paths:
+      - '.github/triggers/.run-watchlist'
+    branches:
+      - main
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Trigger TV Watchlist Update workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run update-tradingview.yml \
+            --repo "${{ github.repository }}" \
+            --ref main
+          echo "Triggered TV Watchlist Update (Playwright) workflow"
