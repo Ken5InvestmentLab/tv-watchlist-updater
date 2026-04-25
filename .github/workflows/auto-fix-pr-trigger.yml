@@ -30,14 +30,14 @@ jobs:
         id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if [ -n "${{ inputs.pr_number }}" ]; then
-            echo "number=${{ inputs.pr_number }}" >> "$GITHUB_OUTPUT"
+
             exit 0
           fi
 
@@ -63,6 +63,7 @@ jobs:
           echo "branch=${PR_BRANCH}" >> "$GITHUB_OUTPUT"
           echo "url=${PR_URL}" >> "$GITHUB_OUTPUT"
           echo "issue=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
+
 
       - name: Stop if no linked issue
         if: steps.meta.outputs.issue == ''
@@ -114,6 +115,7 @@ jobs:
         env:
           ISSUE_NUMBER: ${{ steps.meta.outputs.issue }}
           PR_URL: ${{ steps.meta.outputs.url }}
+
         run: |
           payload=$(cat <<EOF
           {
@@ -133,11 +135,7 @@ jobs:
           EOF
           )
 
-          curl --fail --silent --show-error \
-            -H "Content-Type: application/json" \
-            -X POST \
-            -d "$payload" \
-            "https://discord.com/api/webhooks/1480211740007600351/OWog6gutSvvUfJN6vbZgzI3AsJjMeIdcw_ho0pEGqwHVd_RRMnstqvMg8WGaLnK5jHwO"
+
 
           echo "Retry limit reached. Stop routine."
           exit 0
