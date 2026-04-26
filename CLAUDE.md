@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file is legacy guidance. Codex should use `AGENTS.md` as the primary repository guidance.
 
 ## Commands
 
@@ -56,6 +56,10 @@ Watchlists are named `{prefix}_{YYYYMMDD_HHmm}` (JST), e.g. `wl1_20250411_0930`.
 - Creates a GitHub Issue with label `auto-fix-needed` (creates label first if missing)
 - Saves debug screenshots to the `debug/screenshots` branch (orphan strategy)
 - Only creates an issue if no open `auto-fix-needed` issue already exists
+- Does not run Codex inside GitHub Actions and does not require `OPENAI_API_KEY`
+- Codex app automation checks for these issues every 30 minutes and reads GitHub repository variable `AUTOFIX_AUTO_MERGE` before completion actions
+- If `AUTOFIX_AUTO_MERGE=true`, Codex may repair, push a branch, open/update a PR, verify, merge the PR, close the linked issue, and re-run the main workflow on `main`
+- If unset or not exactly `true`, Codex may repair and open/update a PR, but leaves the PR open for review
 
 ### Critical TradingView UI quirks encoded in the script
 

@@ -1,4 +1,4 @@
-name: Auto-Fix on Failure
+name: Auto-Fix Issue on Failure
 
 on:
   workflow_run:
@@ -13,7 +13,6 @@ jobs:
       contents: write
       issues: write
       actions: read
-      pull-requests: write
 
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +23,7 @@ jobs:
         run: |
           gh label create "auto-fix-needed" \
             --color "FF4444" \
-            --description "Claude Code自動修正待ち" 2>/dev/null || true
+            --description "Codex 30分監視の自動修復待ち" 2>/dev/null || true
 
       - name: Check for existing auto-fix issue
         id: check
@@ -95,11 +94,18 @@ jobs:
           RUN_EVENT: ${{ github.event.workflow_run.event }}
           RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          AUTOFIX_AUTO_MERGE: ${{ vars.AUTOFIX_AUTO_MERGE }}
         run: |
           if [ "${{ steps.screenshots.outputs.has_screenshots }}" = "true" ]; then
             SCREENSHOT_SECTION="スクリーンショットは \`debug/screenshots\` ブランチの \`.debug/\` フォルダに保存されました。"
           else
             SCREENSHOT_SECTION="スクリーンショットなし（アーティファクトが見つかりませんでした）"
+          fi
+
+          if [ "$AUTOFIX_AUTO_MERGE" = "true" ]; then
+            AUTO_MERGE_POLICY="true（Codexは検証成功後に自動マージ・Issueクローズ・main再実行まで進めます）"
+          else
+            AUTO_MERGE_POLICY="false（Codexは修正PR作成まで進め、PRはレビュー待ちで残します）"
           fi
 
           BODY=$(cat <<EOF
@@ -113,79 +119,22 @@ jobs:
           ## デバッグスクリーンショット
           ${SCREENSHOT_SECTION}
 
-          このIssueはClaude Code自動修正ボットによって処理されます。修正完了後に自動でクローズされます。
+          ## Codex 30分監視
+          このIssueはCodexアプリの30分監視オートメーションが検知します。
+
+          GitHub Actions内ではOpenAI APIキーやAI Actionを使いません。Codexがローカルワークスペースで原因調査と修復を行います。
+
+          ## 自動マージポリシー
+          AUTOFIX_AUTO_MERGE: ${AUTO_MERGE_POLICY}
+
+          - GitHub Variables の \`AUTOFIX_AUTO_MERGE\` が \`true\` の場合: Codexは修正PRを作成し、検証成功後にPRマージ、Issueクローズ、mainワークフロー再実行まで行います。
+          - 未設定または \`true\` 以外の場合: Codexは修正push/PR作成まで行い、PRはレビュー待ちで残します。
+
+          Retry tracking marker: \`[codex-auto-fix-attempt]\`
           EOF
           )
 
-          ISSUE_URL=$(gh issue create \
+          gh issue create \
             --title "[auto-fix] ワークフロー失敗: ${RUN_BRANCH}" \
             --label "auto-fix-needed" \
-            --body "${BODY}")
-
-          ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -oE '[0-9]+$')
-          echo "issue_number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
-
-      - name: Create diagnostic PR for Routines trigger
-        if: steps.check.outputs.existing == '0'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_URL: ${{ github.event.workflow_run.html_url }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
-          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
-        run: |
-          git config user.email "actions@github.com"
-          git config user.name "GitHub Actions"
-
-          # スクリーンショットステップ後のブランチ状態をリセットしてmainに戻る
-          git fetch origin main
-          git checkout main
-
-          BRANCH_NAME="auto-fix/run-${RUN_ID}"
-
-          # 既存ブランチがあれば重複作成をスキップ
-          if git ls-remote --exit-code origin "${BRANCH_NAME}" >/dev/null 2>&1; then
-            echo "Branch ${BRANCH_NAME} already exists, skipping PR creation"
-            exit 0
-          fi
-
-          git checkout -b "${BRANCH_NAME}"
-
-          # Routinesトリガー用のマーカーファイルを作成
-          mkdir -p .github
-          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          printf '{"run_id":"%s","timestamp":"%s"}\n' "${RUN_ID}" "${TIMESTAMP}" \
-            > .github/auto-fix-trigger.json
-
-          git add .github/auto-fix-trigger.json
-          git commit -m "auto-fix: trigger for run ${RUN_ID}"
-          git push origin "${BRANCH_NAME}"
-
-          PR_BODY=$(cat <<EOF
-          ## 自動修正トリガー (Claude Code Routines)
-
-          このPRはClaude Code Routinesを起動するためのトリガーです。
-          **⚠️ マージしないでください。修正完了後に自動でクローズされます。**
-
-          ---
-
-          **失敗したワークフロー:** ${RUN_URL}
-          **Issue:** #${ISSUE_NUMBER}
-
-          ## Claude Code 対応手順
-          1. Issue #${ISSUE_NUMBER} のエラーログを確認
-          2. \`debug/screenshots\` ブランチの \`.debug/\` フォルダのスクリーンショットを確認
-          3. \`update-watchlist.js\` を修正
-          4. \`claude/nifty-pascal-Z5aiC\` ブランチにコミット・プッシュ → main にマージ
-          5. \`TV Watchlist Update (Playwright)\` ワークフローを再実行して成功を確認
-          6. このPRをクローズ、Issue #${ISSUE_NUMBER} をクローズ
-          EOF
-          )
-
-          gh pr create \
-            --title "[auto-fix] ワークフロー失敗: ${RUN_BRANCH}" \
-            --body "${PR_BODY}" \
-            --base main \
-            --head "${BRANCH_NAME}" \
-            --label "auto-fix-needed" \
-            2>/dev/null || echo "::warning::PR creation failed (may already exist)"
+            --body "${BODY}"
