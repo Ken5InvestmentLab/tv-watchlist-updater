@@ -16,6 +16,7 @@
 
 - `update-tradingview.yml` is the main workflow and uploads debug screenshots from `tmp/**/*.png` as artifact `tv-debug`.
 - `autofix.yml` runs after failed main workflow runs, creates one open `auto-fix-needed` issue, and saves screenshots to `debug/screenshots`.
+- `auto-fix-pr-trigger.yml` runs diagnostics for auto-fix PRs; keep downstream steps gated when no linked issue is found or the retry cap is reached because `exit 0` only ends the current step.
 - Do not add `openai/codex-action`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY` to GitHub Actions for auto-repair. Auto-repair is handled by the Codex app automation that checks issues every 30 minutes.
 - GitHub Actions should only prepare failure context for Codex: issue body, run URL, commit SHA, branch, and screenshot branch.
 - Codex app automation reads GitHub repository variable `AUTOFIX_AUTO_MERGE` before acting.
