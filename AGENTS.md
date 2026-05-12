@@ -34,7 +34,8 @@
 - When `#overlap-manager-root` intercepts clicks, clear blocking overlays/dialogs before retrying the target button; prefer short click timeouts plus fallback strategies over adding long sleeps.
 - After deleting alerts, allow time for alert slots to be released before creating new alerts.
 - Handle the "One alert to track an entire watchlist" promo dialog before continuing interactions.
-- TradingView Premium watchlists are capped at 500 symbols per list; upload files should be capped with `TRADINGVIEW_WATCHLIST_SYMBOL_LIMIT` (default 500) and retried slightly lower if TradingView shows the watchlist-size upsell modal.
+- TradingView Premium watchlists are capped at 500 symbols per list; the builder must generate files within that limit. The updater must fail with a clear error instead of trimming symbols silently.
+- Before submitting a watchlist alert, verify that the alert condition dialog shows the configured `ALERT_CONDITION_NAME`; do not submit the default Price/Moving Up condition as a fallback.
 
 ## Scope
 
