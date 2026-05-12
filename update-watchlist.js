@@ -1038,18 +1038,15 @@ function makeUploadCopyWithDesiredName(srcPath, desiredName, maxSymbols = TRADIN
   const dstPath = path.join(WORKDIR, `${desiredName}.txt`);
   const originalContent = fs.readFileSync(srcPath, "utf8");
   const symbols = parseWatchlistSymbolsForUpload(originalContent);
-  let uploadContent = originalContent;
 
   if (maxSymbols > 0 && symbols.length > maxSymbols) {
-    console.warn(
-      `[watchlist-upload] ${desiredName}: trimming ${symbols.length} symbols to TradingView limit ${maxSymbols}`
+    throw new Error(
+      `[watchlist-upload] ${desiredName}: source file has ${symbols.length} symbols, above the TradingView limit ${maxSymbols}. Rebuild watchlists in the builder; updater must not trim symbols silently.`
     );
-    uploadContent = `${symbols.slice(0, maxSymbols).join("\n")}\n`;
-  } else {
-    console.log(`[watchlist-upload] ${desiredName}: ${symbols.length} symbols`);
   }
 
-  fs.writeFileSync(dstPath, uploadContent, "utf8");
+  console.log(`[watchlist-upload] ${desiredName}: ${symbols.length} symbols`);
+  fs.writeFileSync(dstPath, originalContent, "utf8");
   return dstPath;
 }
 
@@ -1095,36 +1092,21 @@ async function uploadWatchlistPathViaMenu(page, uploadPath) {
 }
 
 async function importWatchlistFromFile(page, filePath, desiredName) {
-  let uploadLimit = TRADINGVIEW_WATCHLIST_SYMBOL_LIMIT;
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const uploadPath = makeUploadCopyWithDesiredName(filePath, desiredName, uploadLimit);
-    await uploadWatchlistPathViaMenu(page, uploadPath);
-
-    await page.waitForTimeout(2500);
-
-    if (await isWatchlistUploadLimitDialogVisible(page)) {
-      const limitText = await getWatchlistUploadLimitDialogText(page);
-      console.warn(`[watchlist-upload] TradingView upload limit dialog: ${limitText}`);
-      await safeScreenshot(page, `watchlist_upload_limit_${desiredName}`);
-      await closeWatchlistPromoDialog(page).catch(() => false);
-
-      if (attempt === 0 && uploadLimit > 1) {
-        uploadLimit = Math.max(1, Math.min(uploadLimit - 1, Math.floor(uploadLimit * 0.98)));
-        console.warn(`[watchlist-upload] retrying ${desiredName} with ${uploadLimit} symbols`);
-        continue;
-      }
-
-      throw new Error(
-        `TradingView rejected watchlist upload because it exceeds the symbol limit: ${desiredName}`
-      );
-    }
-
-    await safeScreenshot(page, `after_upload_${desiredName}`);
-    return;
-  }
+  const uploadPath = makeUploadCopyWithDesiredName(filePath, desiredName);
+  await uploadWatchlistPathViaMenu(page, uploadPath);
 
   await page.waitForTimeout(2500);
+
+  if (await isWatchlistUploadLimitDialogVisible(page)) {
+    const limitText = await getWatchlistUploadLimitDialogText(page);
+    console.warn(`[watchlist-upload] TradingView upload limit dialog: ${limitText}`);
+    await safeScreenshot(page, `watchlist_upload_limit_${desiredName}`);
+    await closeWatchlistPromoDialog(page).catch(() => false);
+    throw new Error(
+      `TradingView rejected watchlist upload because it exceeds the symbol limit: ${desiredName}. Rebuild watchlists in the builder instead of trimming in updater.`
+    );
+  }
+
   await safeScreenshot(page, `after_upload_${desiredName}`);
 }
 
@@ -2571,6 +2553,38 @@ async function clickAddAlertToList(page) {
   throw new Error("『リストにアラートを追加…』がメニュー内に見つかりませんでした");
 }
 
+function compactText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function getAlertConditionShortName(conditionName) {
+  return compactText(String(conditionName || '').split('(')[0]);
+}
+
+function alertConditionTextMatches(text, conditionName) {
+  const shortName = getAlertConditionShortName(conditionName);
+  return Boolean(shortName && compactText(text).includes(shortName));
+}
+
+async function isAlertConditionSelected(page, conditionName) {
+  const dialog = await getAlertDialogRoot(page);
+  if (!dialog) return false;
+
+  const text = compactText(await dialog.textContent().catch(() => ''));
+  return alertConditionTextMatches(text, conditionName);
+}
+
+async function assertAlertConditionSelected(page, conditionName, tag = 'alert_condition') {
+  if (await isAlertConditionSelected(page, conditionName)) return;
+
+  const dialog = await getAlertDialogRoot(page);
+  const text = dialog ? compactText(await dialog.textContent().catch(() => '')).slice(0, 500) : '';
+  await safeScreenshot(page, `${tag}_not_applied`);
+  throw new Error(
+    `Alert condition was not applied. Expected "${getAlertConditionShortName(conditionName)}"; dialog text="${text}"`
+  );
+}
+
 async function selectAlertCondition(page, conditionName) {
   console.log('Selecting alert condition:', conditionName);
 
@@ -2604,7 +2618,7 @@ async function selectAlertCondition(page, conditionName) {
 
   await page.waitForTimeout(800);
 
-  const shortName = conditionName.split('(')[0].trim();
+  const shortName = getAlertConditionShortName(conditionName);
   console.log('Looking for option matching:', shortName);
 
   const optionCandidates = [
@@ -2620,7 +2634,17 @@ async function selectAlertCondition(page, conditionName) {
   let selected = false;
   for (const opt of optionCandidates) {
     if (await opt.isVisible().catch(() => false)) {
-      if (await safeClick(opt, { timeout: 5000, force: true })) {
+      const target = opt
+        .locator('xpath=ancestor-or-self::*[@role="option" or @role="menuitem" or @role="row" or name()="button"][1]')
+        .first();
+      const clickTarget = (await target.count().catch(() => 0)) > 0 ? target : opt;
+
+      if (await safeClick(clickTarget, { timeout: 5000, force: true })) {
+        await page.waitForTimeout(900);
+        if (!(await isAlertConditionSelected(page, conditionName))) {
+          console.warn(`[alert] condition candidate click did not apply: ${shortName}`);
+          continue;
+        }
         selected = true;
         break;
       }
@@ -3117,6 +3141,7 @@ async function createWatchlistAlertIfPossible(page, listName) {
 
     await selectAlertCondition(page, ALERT_CONDITION_NAME);
     await logAlertIntervalState(page, `condition-selected-${listName}`);
+    await assertAlertConditionSelected(page, ALERT_CONDITION_NAME, `before_alert_submit_${listName}`);
 
     await verifyAlertIntervalIsSameAsChart(page);
 
