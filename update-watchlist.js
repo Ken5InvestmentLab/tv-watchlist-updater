@@ -30,6 +30,7 @@ const STEP_TIMEOUT = 45000;
 const ALERT_SLOT_RELEASE_WAIT_MS = Number(process.env.ALERT_SLOT_RELEASE_WAIT_MS || 30000);
 const WATCHLIST_PROMO_RETRY_MAX = Number(process.env.WATCHLIST_PROMO_RETRY_MAX || 6);
 const WATCHLIST_PROMO_RETRY_WAIT_MS = Number(process.env.WATCHLIST_PROMO_RETRY_WAIT_MS || 30000);
+const TRADINGVIEW_WATCHLIST_SYMBOL_LIMIT = Number(process.env.TRADINGVIEW_WATCHLIST_SYMBOL_LIMIT || 500);
 
 const WORKDIR = path.resolve(process.cwd(), "tmp");
 const OUT1 = path.join(WORKDIR, "wl1.txt");
@@ -1024,10 +1025,31 @@ async function confirmTradingViewDialog(page) {
 // ==============================
 // Import watchlist
 // ==============================
-function makeUploadCopyWithDesiredName(srcPath, desiredName) {
+function parseWatchlistSymbolsForUpload(content) {
+  return content
+    .replace(/^\uFEFF/, "")
+    .split(/[\s,;]+/)
+    .map(symbol => symbol.trim())
+    .filter(Boolean);
+}
+
+function makeUploadCopyWithDesiredName(srcPath, desiredName, maxSymbols = TRADINGVIEW_WATCHLIST_SYMBOL_LIMIT) {
   ensureDir(WORKDIR);
   const dstPath = path.join(WORKDIR, `${desiredName}.txt`);
-  fs.copyFileSync(srcPath, dstPath);
+  const originalContent = fs.readFileSync(srcPath, "utf8");
+  const symbols = parseWatchlistSymbolsForUpload(originalContent);
+  let uploadContent = originalContent;
+
+  if (maxSymbols > 0 && symbols.length > maxSymbols) {
+    console.warn(
+      `[watchlist-upload] ${desiredName}: trimming ${symbols.length} symbols to TradingView limit ${maxSymbols}`
+    );
+    uploadContent = `${symbols.slice(0, maxSymbols).join("\n")}\n`;
+  } else {
+    console.log(`[watchlist-upload] ${desiredName}: ${symbols.length} symbols`);
+  }
+
+  fs.writeFileSync(dstPath, uploadContent, "utf8");
   return dstPath;
 }
 
@@ -1035,9 +1057,7 @@ async function clickUploadList(page) {
   await clickMenuItemByText(page, /リストをアップロード|Upload list/i);
 }
 
-async function importWatchlistFromFile(page, filePath, desiredName) {
-  const uploadPath = makeUploadCopyWithDesiredName(filePath, desiredName);
-
+async function uploadWatchlistPathViaMenu(page, uploadPath) {
   console.log("Uploading file:", uploadPath);
   console.log("File exists:", fs.existsSync(uploadPath));
   console.log("File size:", fs.statSync(uploadPath).size);
@@ -1071,6 +1091,37 @@ async function importWatchlistFromFile(page, filePath, desiredName) {
   } else {
     await safeScreenshot(page, "file_input_and_filechooser_not_found");
     throw new Error("input[type=file] も filechooser も取得できませんでした");
+  }
+}
+
+async function importWatchlistFromFile(page, filePath, desiredName) {
+  let uploadLimit = TRADINGVIEW_WATCHLIST_SYMBOL_LIMIT;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const uploadPath = makeUploadCopyWithDesiredName(filePath, desiredName, uploadLimit);
+    await uploadWatchlistPathViaMenu(page, uploadPath);
+
+    await page.waitForTimeout(2500);
+
+    if (await isWatchlistUploadLimitDialogVisible(page)) {
+      const limitText = await getWatchlistUploadLimitDialogText(page);
+      console.warn(`[watchlist-upload] TradingView upload limit dialog: ${limitText}`);
+      await safeScreenshot(page, `watchlist_upload_limit_${desiredName}`);
+      await closeWatchlistPromoDialog(page).catch(() => false);
+
+      if (attempt === 0 && uploadLimit > 1) {
+        uploadLimit = Math.max(1, Math.min(uploadLimit - 1, Math.floor(uploadLimit * 0.98)));
+        console.warn(`[watchlist-upload] retrying ${desiredName} with ${uploadLimit} symbols`);
+        continue;
+      }
+
+      throw new Error(
+        `TradingView rejected watchlist upload because it exceeds the symbol limit: ${desiredName}`
+      );
+    }
+
+    await safeScreenshot(page, `after_upload_${desiredName}`);
+    return;
   }
 
   await page.waitForTimeout(2500);
@@ -1840,6 +1891,7 @@ async function closeOfferPopup(page) {
 async function isWatchlistPromoDialogVisible(page) {
   const markers = [
     page.getByText(/One alert to track an entire watchlist/i).first(),
+    page.getByText(/Watch more in your watchlists/i).first(),
     page.locator('button[data-qa-id="promo-dialog-close-button"]').first(),
     page.getByText(/Current plan/i).first(),
     page.getByText(/Premium/i).first(),
@@ -1852,6 +1904,30 @@ async function isWatchlistPromoDialogVisible(page) {
   }
 
   return hitCount >= 2;
+}
+
+async function isWatchlistUploadLimitDialogVisible(page) {
+  const markers = [
+    page.getByText(/Watch more in your watchlists/i).first(),
+    page.getByText(/up to \d+\s+symbols per list/i).first(),
+    page.getByText(/Current plan/i).first(),
+    page.getByText(/Ultimate/i).first(),
+  ];
+
+  let hitCount = 0;
+  for (const marker of markers) {
+    if (await marker.isVisible().catch(() => false)) hitCount++;
+  }
+
+  return hitCount >= 2;
+}
+
+async function getWatchlistUploadLimitDialogText(page) {
+  const bodyText = ((await page.locator("body").textContent().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+  const marker = "Watch more in your watchlists";
+  const idx = bodyText.indexOf(marker);
+  if (idx >= 0) return bodyText.slice(idx, Math.min(bodyText.length, idx + 500));
+  return bodyText.slice(0, 500);
 }
 
 async function getWatchlistPromoDialogText(page) {
