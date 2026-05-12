@@ -167,26 +167,53 @@ async function findVisibleDeleteButtonWithin(scope, page = null) {
 // Base UI: Watchlist panel / menu (UI変更に強い版)
 // ==============================
 
+async function isLikelyWatchlistMenuButton(locator) {
+  if (!(await locator.isVisible().catch(() => false))) return false;
+
+  const dataName = await locator.getAttribute('data-name').catch(() => null);
+  if (dataName === 'watchlists-button') return true;
+
+  const box = await locator.boundingBox().catch(() => null);
+  if (!box || box.width < 72) return false;
+
+  const text = ((await locator.textContent().catch(() => "")) || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const hasPopup = await locator.getAttribute('aria-haspopup').catch(() => null);
+  const expanded = await locator.getAttribute('aria-expanded').catch(() => null);
+
+  return text.length > 0 || !!hasPopup || !!expanded;
+}
+
+async function firstLikelyWatchlistMenuButton(locator, max = 20) {
+  const count = Math.min(await locator.count().catch(() => 0), max);
+  for (let i = 0; i < count; i++) {
+    const candidate = locator.nth(i);
+    if (await isLikelyWatchlistMenuButton(candidate)) return candidate;
+  }
+  return null;
+}
+
 async function getWatchlistButton(page) {
   // 1. data-name 属性（最も信頼できる - パネルが開いているときのみ表示）
-  const dataNameBtn = page.locator('button[data-name="watchlists-button"]').first();
-  if (await dataNameBtn.isVisible().catch(() => false)) return dataNameBtn;
+  const dataNameBtn = await firstLikelyWatchlistMenuButton(page.locator('button[data-name="watchlists-button"]'));
+  if (dataNameBtn) return dataNameBtn;
 
   // 2. ロール + テキスト
-  const roleBtn = page.getByRole('button', { name: /ウォッチリスト|Watchlist/i }).first();
-  if (await roleBtn.isVisible().catch(() => false)) return roleBtn;
+  const roleBtn = await firstLikelyWatchlistMenuButton(page.getByRole('button', { name: /ウォッチリスト|Watchlist/i }));
+  if (roleBtn) return roleBtn;
 
   // 3. aria-label や title (部分一致)
-  const attrBtn = page.locator('button[aria-label*="ウォッチリスト"], button[aria-label*="Watchlist"], button[title*="ウォッチリスト"], button[title*="Watchlist"]').first();
-  if (await attrBtn.isVisible().catch(() => false)) return attrBtn;
+  const attrBtn = await firstLikelyWatchlistMenuButton(page.locator('button[aria-label*="ウォッチリスト"], button[aria-label*="Watchlist"], button[title*="ウォッチリスト"], button[title*="Watchlist"]'));
+  if (attrBtn) return attrBtn;
 
   // 4. data-tooltip (部分一致)
-  const tooltipBtn = page.locator('button[data-tooltip*="ウォッチリスト"], button[data-tooltip*="Watchlist"]').first();
-  if (await tooltipBtn.isVisible().catch(() => false)) return tooltipBtn;
+  const tooltipBtn = await firstLikelyWatchlistMenuButton(page.locator('button[data-tooltip*="ウォッチリスト"], button[data-tooltip*="Watchlist"]'));
+  if (tooltipBtn) return tooltipBtn;
 
   // 5. 部分クラス名
-  const classBtn = page.locator('button[class*="watchlist"], button[class*="Watchlist"]').first();
-  if (await classBtn.isVisible().catch(() => false)) return classBtn;
+  const classBtn = await firstLikelyWatchlistMenuButton(page.locator('button[class*="watchlist"], button[class*="Watchlist"]'));
+  if (classBtn) return classBtn;
 
   // SVG フォールバックは廃止（マッチが広すぎてランダムなボタンを返すリスクがある）
 
@@ -397,10 +424,8 @@ async function isWatchlistPanelReady(page) {
   // 方法3: パネル内の具体的な要素（より特定性の高いセレクタを優先）
   const panelIndicators = [
     'div[data-name="watchlist-list"]',
-    'div[data-role="list"]',
     '[data-widget-type="watchlist"]',
     '[data-name="watchlist-widget"]',
-    '[role="tabpanel"]',
   ];
 
   for (const sel of panelIndicators) {
@@ -1595,6 +1620,11 @@ async function openWatchlistMenuHard(page, retryCount = 8) {
         return true;
       }
 
+      if (!(await isWatchlistPanelReady(page).catch(() => false))) {
+        console.log('[menu] watchlist panel is closed; opening it before menu click');
+        await ensureWatchlistPanelOpen(page);
+      }
+
       let button = null;
       if (typeof getWatchlistButton === 'function') {
         button = await getWatchlistButton(page);
@@ -1604,7 +1634,7 @@ async function openWatchlistMenuHard(page, retryCount = 8) {
         if (typeof getWatchlistButton === 'function') button = await getWatchlistButton(page);
       }
       if (!button) {
-        button = page.locator('button[data-name="watchlists-button"], button[aria-label*="Watchlist"], button[aria-label*="ウォッチリスト"]').first();
+        button = page.locator('button[data-name="watchlists-button"]').first();
         if (!(await button.isVisible().catch(() => false))) {
           console.warn(`[menu] ウォッチリストボタンが見つからないためリトライします...`);
           continue;
