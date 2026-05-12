@@ -233,6 +233,16 @@ async function waitForMenuOpen(page, timeout = 10000) {
   return null;
 }
 
+async function waitForWatchlistMenuVisible(page, menuSelector, menuInnerSelector, timeout = 2500) {
+  try {
+    await page.waitForSelector(menuSelector, { state: 'visible', timeout });
+    await page.waitForSelector(menuInnerSelector, { state: 'visible', timeout: 1000 }).catch(() => { });
+    return true;
+  } catch { }
+
+  return !!(await waitForMenuOpen(page, timeout).catch(() => null));
+}
+
 async function findMenuItemByRole(page, nameRegex) {
   // role="menuitem" かつテキストが一致
   const item = page.getByRole('menuitem', { name: nameRegex }).first();
@@ -507,6 +517,91 @@ async function closeAnyMenu(page) {
   await page.waitForTimeout(200);
   await page.keyboard.press("Escape").catch(() => { });
   await page.waitForTimeout(250);
+}
+
+async function getClickInterceptorInfo(page, locator) {
+  return await locator.evaluate(el => {
+    const rect = el.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || hit === el || el.contains(hit)) return null;
+
+    const parts = [];
+    let node = hit;
+    for (let i = 0; node && node !== document.body && i < 4; i++) {
+      let label = node.tagName ? node.tagName.toLowerCase() : 'node';
+      if (node.id) label += `#${node.id}`;
+      const role = node.getAttribute && node.getAttribute('role');
+      if (role) label += `[role="${role}"]`;
+      const dataQa = node.getAttribute && node.getAttribute('data-qa-id');
+      if (dataQa) label += `[data-qa-id="${dataQa}"]`;
+      const cls = typeof node.className === 'string' ? node.className.trim().split(/\s+/).slice(0, 3).join('.') : '';
+      if (cls) label += `.${cls}`;
+      parts.push(label);
+      node = node.parentElement;
+    }
+
+    const text = (hit.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    return { path: parts.join(' <- '), text };
+  }).catch(() => null);
+}
+
+async function dismissWatchlistClickInterceptors(page, button) {
+  await handleUnexpectedDialogs(page).catch(() => false);
+
+  let interceptor = await getClickInterceptorInfo(page, button);
+  if (!interceptor) return false;
+
+  console.warn(`[menu] watchlist button click is blocked by: ${interceptor.path} ${interceptor.text ? `text="${interceptor.text}"` : ''}`);
+
+  const closeSelectors = [
+    '#overlap-manager-root button[data-qa-id="close"]',
+    '#overlap-manager-root button[aria-label*="Close" i]',
+    '#overlap-manager-root [role="button"][aria-label*="Close" i]',
+    '#overlap-manager-root button[class*="close" i]',
+    '#overlap-manager-root [class*="closeButton"]',
+    '#overlap-manager-root button:has(svg path[d*="1.5 1.5 21 21"])',
+    'button[data-qa-id="close"]',
+    'button[aria-label*="Close" i]',
+  ];
+
+  for (const sel of closeSelectors) {
+    const candidate = await firstVisible(page.locator(sel), 10);
+    if (!candidate) continue;
+
+    if (await clickBestEffort(candidate, 3000)) {
+      await page.waitForTimeout(700);
+      interceptor = await getClickInterceptorInfo(page, button);
+      if (!interceptor) {
+        console.log(`[menu] blocking overlay dismissed via ${sel}`);
+        return true;
+      }
+    }
+  }
+
+  for (let i = 0; i < 2; i++) {
+    await page.keyboard.press("Escape").catch(() => { });
+    await page.waitForTimeout(500);
+    interceptor = await getClickInterceptorInfo(page, button);
+    if (!interceptor) {
+      console.log("[menu] blocking overlay dismissed via Escape");
+      return true;
+    }
+  }
+
+  await page.mouse.click(10, 10).catch(() => { });
+  await page.waitForTimeout(700);
+  interceptor = await getClickInterceptorInfo(page, button);
+  if (!interceptor) {
+    console.log("[menu] blocking overlay dismissed via backdrop click");
+    return true;
+  }
+
+  console.warn(`[menu] blocking overlay is still present: ${interceptor.path}`);
+  return false;
 }
 
 async function getVisibleWatchlistMenuRoot(page) {
@@ -1487,8 +1582,8 @@ async function deleteManagedAlerts(page, prefixes) {
 }
 
 async function openWatchlistMenuHard(page, retryCount = 8) {
-  const menuSelector = '[data-qa-id="active-watchlist-menu"], [data-role="menu"]';
-  const menuInnerSelector = '[data-qa-id="menu-inner"], [role="menu"]';
+  const menuSelector = '[data-qa-id="active-watchlist-menu"], [data-role="menu"], [role="menu"], div[data-name="menu-inner"]';
+  const menuInnerSelector = '[data-qa-id="menu-inner"], [role="menu"], div[data-name="menu-inner"]';
 
   for (let i = 0; i < retryCount; i++) {
     try {
@@ -1518,40 +1613,57 @@ async function openWatchlistMenuHard(page, retryCount = 8) {
 
       // 1. 通常クリックを試行
       // 手動でどこを押しても開くとのことなので、まずはボタン中央をクリック
-      await button.click({ delay: 50 });
+      await dismissWatchlistClickInterceptors(page, button).catch(err => {
+        console.warn(`[menu] blocking overlay cleanup failed: ${err.message}`);
+      });
 
-      // 2. メニューが出現したか「確定した属性」で判定
-      try {
-        await page.waitForSelector(menuSelector, { state: 'visible', timeout: 2500 });
-        // 中身（menu-inner）もしっかり描画されるまで待機
-        await page.waitForSelector(menuInnerSelector, { state: 'visible', timeout: 1000 });
+      const clickAttempts = [
+        {
+          name: 'normal click',
+          run: () => button.click({ delay: 50, timeout: 8000 }),
+        },
+        {
+          name: 'forced click',
+          run: () => button.click({ delay: 50, timeout: 8000, force: true }),
+        },
+        {
+          name: 'coordinate click',
+          run: async () => {
+            const box = await button.boundingBox();
+            if (!box) throw new Error('watchlist button bounding box is unavailable');
+            await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2);
+          },
+        },
+        {
+          name: 'JS dispatch',
+          run: () => button.evaluate(el => {
+            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+            el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+          }),
+        },
+      ];
 
-        console.log('[menu] メニューの出現を確定しました。');
-        return true;
-      } catch (e) {
-        console.warn(`[menu] 通常クリックでメニューが確認できません。強制発火を試みます...`);
-
-        // 3. バックアップ：座標指定クリック（右端の矢印付近を狙う）
-        const box = await button.boundingBox();
-        if (box) {
-          await page.mouse.click(box.x + box.width - 10, box.y + box.height / 2);
-        }
-
-        // 4. 最終手段：JavaScriptでの直接イベント発火
-        await button.evaluate(el => {
-          el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-          el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-          el.click();
-        });
-
-        // 判定
-        await page.waitForTimeout(1000);
-        if (await page.locator(menuSelector).isVisible()) {
-          console.log('[menu] 強制発火によりメニューが開きました。');
-          return true;
+      for (const attempt of clickAttempts) {
+        try {
+          await attempt.run();
+          if (await waitForWatchlistMenuVisible(page, menuSelector, menuInnerSelector, 2500)) {
+            console.log(`[menu] watchlist menu opened via ${attempt.name}`);
+            return true;
+          }
+          console.warn(`[menu] ${attempt.name} did not reveal the watchlist menu`);
+        } catch (err) {
+          console.warn(`[menu] ${attempt.name} failed: ${err.message}`);
+          if (/intercepts pointer events|subtree intercepts pointer events/i.test(err.message || '')) {
+            await dismissWatchlistClickInterceptors(page, button).catch(cleanupErr => {
+              console.warn(`[menu] interceptor cleanup after failed click failed: ${cleanupErr.message}`);
+            });
+          }
         }
       }
 
+      console.warn('[menu] all watchlist menu click strategies failed in this attempt');
+      continue;
     } catch (err) {
       console.error(`[menu] 試行 ${i + 1} 中にエラー: ${err.message}`);
     }
