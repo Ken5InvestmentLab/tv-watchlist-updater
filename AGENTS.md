@@ -32,6 +32,7 @@
 - `openWatchlistMenuHard` intentionally retries multiple menu-opening strategies because the TradingView menu is fragile.
 - Before opening the watchlist menu, ensure the watchlist side panel is open and avoid using broad Watchlist aria/text selectors as the menu button; those can match the right-sidebar panel toggle.
 - When `#overlap-manager-root` intercepts clicks, clear blocking overlays/dialogs before retrying the target button; prefer short click timeouts plus fallback strategies over adding long sleeps.
+- If TradingView shows a "Session disconnected" dialog because the account was accessed from another browser or device, click `Connect` to reclaim the updater session, but cap reconnect retries to avoid an endless loop if another device keeps taking over.
 - After deleting alerts, allow time for alert slots to be released before creating new alerts.
 - Handle the "One alert to track an entire watchlist" promo dialog before continuing interactions.
 - TradingView Premium watchlists are capped at 500 symbols per list; the builder must generate files within that limit. The updater must fail with a clear error instead of trimming symbols silently.
