@@ -24,3 +24,12 @@ Disable full auto-merge:
 ```bash
 gh variable delete AUTOFIX_AUTO_MERGE --repo Ken5InvestmentLab/tv-watchlist-updater
 ```
+
+## TradingView login fallback
+
+The updater first uses `TRADINGVIEW_STORAGE_STATE`. If that session is no longer logged in, it can try an automatic login when these optional GitHub Secrets are configured:
+
+- `TRADINGVIEW_USERNAME` or `TRADINGVIEW_EMAIL`
+- `TRADINGVIEW_PASSWORD`
+
+If TradingView asks for 2FA/CAPTCHA, run `node save-storage-state.js` locally and update `TRADINGVIEW_STORAGE_STATE` instead.

@@ -6,6 +6,9 @@ const { chromium } = require("playwright");
 // ENV
 // ==============================
 const TRADINGVIEW_STORAGE_STATE = process.env.TRADINGVIEW_STORAGE_STATE;
+const TRADINGVIEW_USERNAME =
+  process.env.TRADINGVIEW_USERNAME || process.env.TRADINGVIEW_EMAIL || "";
+const TRADINGVIEW_PASSWORD = process.env.TRADINGVIEW_PASSWORD || "";
 
 const WATCHLIST_1_URL = process.env.WATCHLIST_1_URL;
 const WATCHLIST_2_URL = process.env.WATCHLIST_2_URL;
@@ -35,6 +38,8 @@ const TRADINGVIEW_WATCHLIST_SYMBOL_LIMIT = Number(process.env.TRADINGVIEW_WATCHL
 const WORKDIR = path.resolve(process.cwd(), "tmp");
 const OUT1 = path.join(WORKDIR, "wl1.txt");
 const OUT2 = path.join(WORKDIR, "wl2.txt");
+
+let tradingViewLoginRefreshAttempted = false;
 
 // ==============================
 // Timestamp / Names (JST)
@@ -1054,7 +1059,20 @@ async function clickUploadList(page) {
   await clickMenuItemByText(page, /リストをアップロード|Upload list/i);
 }
 
-async function uploadWatchlistPathViaMenu(page, uploadPath) {
+async function recoverLoginFromWatchlistUploadBlocker(page) {
+  if (!(await isWatchlistPromoLoginStateVisible(page)) && !(await isTradingViewLoginRequired(page))) {
+    return false;
+  }
+
+  const blockerText = (await getWatchlistPromoDialogText(page)).replace(/\s+/g, " ").slice(0, 500);
+  console.warn(`[login] Watchlist upload is blocked by login/plan state: ${blockerText}`);
+  await safeScreenshot(page, "watchlist_upload_login_required");
+  await closeWatchlistPromoDialog(page).catch(() => false);
+  await loginToTradingView(page, "watchlist upload requires signed-in plan", { force: true });
+  return true;
+}
+
+async function uploadWatchlistPathViaMenu(page, uploadPath, options = {}) {
   console.log("Uploading file:", uploadPath);
   console.log("File exists:", fs.existsSync(uploadPath));
   console.log("File size:", fs.statSync(uploadPath).size);
@@ -1086,6 +1104,11 @@ async function uploadWatchlistPathViaMenu(page, uploadPath) {
     await input.setInputFiles(uploadPath);
     console.log("setInputFiles done:", uploadPath);
   } else {
+    if (options.allowLoginRetry !== false && await recoverLoginFromWatchlistUploadBlocker(page)) {
+      await uploadWatchlistPathViaMenu(page, uploadPath, { allowLoginRetry: false });
+      return;
+    }
+
     await safeScreenshot(page, "file_input_and_filechooser_not_found");
     throw new Error("input[type=file] も filechooser も取得できませんでした");
   }
@@ -1217,6 +1240,210 @@ async function closeCreateAlertDialogIfVisible(page) {
   return true;
 }
 
+async function firstVisibleLocatorFrom(candidates) {
+  for (const candidate of candidates) {
+    if (await candidate.isVisible().catch(() => false)) return candidate;
+  }
+  return null;
+}
+
+async function waitForFirstVisibleLocator(candidates, timeout = 10000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const found = await firstVisibleLocatorFrom(candidates);
+    if (found) return found;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return null;
+}
+
+async function clickFirstVisibleLocator(candidates, timeout = 5000) {
+  const found = await firstVisibleLocatorFrom(candidates);
+  if (!found) return false;
+  return await safeClick(found, { timeout, force: true });
+}
+
+async function isTradingViewLoginRequired(page) {
+  if (/signin|sign-in|accounts\.tradingview\.com/i.test(page.url())) return true;
+
+  const loginMarkers = [
+    page.getByRole("button", { name: /^Sign in$|^Log in$|^ログイン$|^サインイン$/i }).first(),
+    page.getByRole("link", { name: /^Sign in$|^Log in$|^ログイン$|^サインイン$/i }).first(),
+    page.locator('a[href*="signin"], a[href*="sign-in"]').first(),
+    page.locator('button[data-name*="signin" i], [role="button"][data-name*="signin" i]').first(),
+    page.getByText(/After sign in|After login|サインイン後|ログイン後/i).first(),
+    page.getByText(/Sign in to TradingView|Log in to TradingView|TradingViewにログイン|ログインしてください/i).first(),
+  ];
+
+  return !!(await firstVisibleLocatorFrom(loginMarkers));
+}
+
+async function isTradingViewInteractiveChallengeVisible(page) {
+  const bodyText = await page.locator("body").textContent().catch(() => "");
+  return /two-factor|2-factor|2FA|verification code|security code|captcha|reCAPTCHA|認証コード|確認コード|2段階|二段階|CAPTCHA/i.test(bodyText || "");
+}
+
+async function openTradingViewLoginForm(page, force = false) {
+  await closeAnyMenu(page).catch(() => { });
+  await closeCreateAlertDialogIfVisible(page).catch(() => { });
+  await closeWatchlistPromoDialog(page).catch(() => false);
+
+  if (!force) {
+    const clicked = await clickFirstVisibleLocator(
+      [
+        page.getByRole("button", { name: /^Sign in$|^Log in$|^ログイン$|^サインイン$/i }).first(),
+        page.getByRole("link", { name: /^Sign in$|^Log in$|^ログイン$|^サインイン$/i }).first(),
+        page.locator('a[href*="signin"], a[href*="sign-in"]').first(),
+      ],
+      5000
+    );
+    if (clicked) {
+      await page.waitForTimeout(1200);
+    }
+  }
+
+  if (force || !(await waitForFirstVisibleLocator(tradingViewUsernameInputs(page), 1500))) {
+    await page.goto("https://www.tradingview.com/#signin", { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle").catch(() => { });
+    await page.waitForTimeout(1500);
+  }
+
+  await clickFirstVisibleLocator(
+    [
+      page.getByRole("button", { name: /^Email$|^メール$|メールアドレス/i }).first(),
+      page.getByRole("link", { name: /^Email$|^メール$|メールアドレス/i }).first(),
+      page.locator('button:has-text("Email"), [role="button"]:has-text("Email")').first(),
+      page.locator('button:has-text("メール"), [role="button"]:has-text("メール")').first(),
+    ],
+    4000
+  );
+  await page.waitForTimeout(800);
+}
+
+function tradingViewUsernameInputs(page) {
+  return [
+    page.locator('input[name="username"]').first(),
+    page.locator('input[name="email"]').first(),
+    page.locator('input[name="id_username"]').first(),
+    page.locator('input[autocomplete="username"]').first(),
+    page.locator('input[type="email"]').first(),
+    page.locator('input[placeholder*="Email" i]').first(),
+    page.locator('input[placeholder*="Username" i]').first(),
+    page.locator('input[placeholder*="メール"]').first(),
+    page.locator('input[placeholder*="ユーザー"]').first(),
+  ];
+}
+
+function tradingViewPasswordInputs(page) {
+  return [
+    page.locator('input[name="password"]').first(),
+    page.locator('input[name="id_password"]').first(),
+    page.locator('input[autocomplete="current-password"]').first(),
+    page.locator('input[type="password"]').first(),
+    page.locator('input[placeholder*="Password" i]').first(),
+    page.locator('input[placeholder*="パスワード"]').first(),
+  ];
+}
+
+async function loginToTradingView(page, reason = "login required", options = {}) {
+  if (!TRADINGVIEW_USERNAME || !TRADINGVIEW_PASSWORD) {
+    await safeScreenshot(page, "tradingview_login_credentials_missing");
+    throw new Error(
+      "TradingView のログイン状態が切れています。自動ログインには GitHub Secrets の TRADINGVIEW_USERNAME または TRADINGVIEW_EMAIL と TRADINGVIEW_PASSWORD が必要です。未設定の場合は node save-storage-state.js で TRADINGVIEW_STORAGE_STATE を更新してください。"
+    );
+  }
+
+  console.log(`[login] TradingView login required: ${reason}`);
+  await openTradingViewLoginForm(page, !!options.force);
+
+  const usernameInput = await waitForFirstVisibleLocator(tradingViewUsernameInputs(page), 12000);
+  if (!usernameInput) {
+    await safeScreenshot(page, "tradingview_login_username_input_not_found");
+    throw new Error("TradingView のログイン入力欄が見つかりませんでした。UI変更、2FA、または手動ログインが必要な可能性があります。");
+  }
+
+  await usernameInput.fill(TRADINGVIEW_USERNAME);
+  await page.waitForTimeout(400);
+
+  let passwordInput = await waitForFirstVisibleLocator(tradingViewPasswordInputs(page), 2500);
+  if (!passwordInput) {
+    await clickFirstVisibleLocator(
+      [
+        page.getByRole("button", { name: /^Next$|^Continue$|^続行$|^次へ$/i }).first(),
+        page.locator('button[type="submit"]').first(),
+      ],
+      5000
+    );
+    passwordInput = await waitForFirstVisibleLocator(tradingViewPasswordInputs(page), 12000);
+  }
+
+  if (!passwordInput) {
+    await safeScreenshot(page, "tradingview_login_password_input_not_found");
+    throw new Error("TradingView のパスワード入力欄が見つかりませんでした。UI変更、2FA、または手動ログインが必要な可能性があります。");
+  }
+
+  await passwordInput.fill(TRADINGVIEW_PASSWORD);
+  await page.waitForTimeout(300);
+  await passwordInput.press("Enter").catch(() => { });
+  await page.waitForTimeout(3500);
+
+  if (await isTradingViewLoginRequired(page)) {
+    await clickFirstVisibleLocator(
+      [
+        page.getByRole("button", { name: /^Sign in$|^Log in$|^ログイン$|^サインイン$|^Continue$|^続行$/i }).first(),
+        page.locator('button[type="submit"]').first(),
+      ],
+      5000
+    );
+    await page.waitForTimeout(5000);
+  }
+
+  if (await isTradingViewInteractiveChallengeVisible(page)) {
+    await safeScreenshot(page, "tradingview_login_interactive_challenge");
+    throw new Error("TradingView ログインで 2FA/CAPTCHA などの対話認証が必要です。手動ログイン後に storage state を更新してください。");
+  }
+
+  if (await isTradingViewLoginRequired(page)) {
+    await safeScreenshot(page, "tradingview_login_failed");
+    throw new Error("TradingView の自動ログインに失敗しました。認証情報、2FA、または手動 storage state 更新を確認してください。");
+  }
+
+  await page.goto("https://www.tradingview.com/chart/", { waitUntil: "domcontentloaded" });
+  await page.waitForLoadState("networkidle").catch(() => { });
+  await waitForTradingViewReady(page);
+  tradingViewLoginRefreshAttempted = true;
+  console.log("[login] TradingView login completed.");
+}
+
+async function ensureTradingViewLoggedIn(page) {
+  if (!(await isTradingViewLoginRequired(page))) return false;
+  await loginToTradingView(page, "login prompt detected");
+  return true;
+}
+
+async function isAlertsTabSelected(page) {
+  const selectedAlertsTab = page
+    .locator('[role="tab"][aria-selected="true"]')
+    .filter({ hasText: /^Alerts$|^アラート$/i })
+    .first();
+
+  return await selectedAlertsTab.isVisible().catch(() => false);
+}
+
+async function isAlertsEmptyStateVisible(page) {
+  const emptyText = page
+    .getByText(
+      /Alerts notify you instantly|Create one to get started|No alerts|No alerts created|アラートがありません|アラートはありません|アラートなし/i
+    )
+    .first();
+  if (await emptyText.isVisible().catch(() => false)) return true;
+
+  const createAlertButton = page
+    .getByRole("button", { name: /^Create alert$|^アラートを作成$|^アラート作成$/i })
+    .first();
+  return (await isAlertsTabSelected(page)) && (await createAlertButton.isVisible().catch(() => false));
+}
+
 async function isAlertsContentReady(page) {
   const markers = [
     page.locator('[data-name="alert-item-ticker"]').first(),
@@ -1236,18 +1463,15 @@ async function isAlertsContentReady(page) {
     if (await marker.isVisible().catch(() => false)) return true;
   }
 
+  if (await isAlertsEmptyStateVisible(page)) return true;
+
   return false;
 }
 
 async function isAlertsSidebarOpen(page) {
   if (await isAlertsContentReady(page)) return true;
 
-  const selectedAlertsTab = page
-    .locator('[role="tab"][aria-selected="true"]')
-    .filter({ hasText: /^Alerts$|^アラート$/i })
-    .first();
-
-  if (await selectedAlertsTab.isVisible().catch(() => false)) return true;
+  if (await isAlertsTabSelected(page)) return true;
 
   return false;
 }
@@ -1874,8 +2098,10 @@ async function isWatchlistPromoDialogVisible(page) {
   const markers = [
     page.getByText(/One alert to track an entire watchlist/i).first(),
     page.getByText(/Watch more in your watchlists/i).first(),
+    page.getByText(/Sort your symbols better with more watchlists/i).first(),
     page.locator('button[data-qa-id="promo-dialog-close-button"]').first(),
     page.getByText(/Current plan/i).first(),
+    page.getByText(/After sign in|After login|サインイン後|ログイン後/i).first(),
     page.getByText(/Premium/i).first(),
     page.getByText(/Ultimate/i).first(),
   ];
@@ -1886,6 +2112,23 @@ async function isWatchlistPromoDialogVisible(page) {
   }
 
   return hitCount >= 2;
+}
+
+async function isWatchlistPromoLoginStateVisible(page) {
+  const markers = [
+    page.getByText(/Current plan/i).first(),
+    page.getByText(/^Basic$/i).first(),
+    page.getByText(/After sign in|After login|サインイン後|ログイン後/i).first(),
+    page.getByText(/^Premium$/i).first(),
+    page.getByText(/Sort your symbols better with more watchlists/i).first(),
+  ];
+
+  let hitCount = 0;
+  for (const marker of markers) {
+    if (await marker.isVisible().catch(() => false)) hitCount++;
+  }
+
+  return hitCount >= 3;
 }
 
 async function isWatchlistUploadLimitDialogVisible(page) {
@@ -3096,7 +3339,7 @@ async function ensureIndicatorOnChart(page, indicatorName) {
   console.log(`[indicator] Not found on chart, adding: "${indicatorName}"`);
   await safeScreenshot(page, 'before_add_indicator');
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       await addIndicatorToChart(page, indicatorName);
       if (await isIndicatorOnChart(page, indicatorName)) {
@@ -3106,7 +3349,26 @@ async function ensureIndicatorOnChart(page, indicatorName) {
       console.warn(`[indicator] Attempt ${attempt}: added but not yet visible`);
     } catch (err) {
       console.warn(`[indicator] Attempt ${attempt} failed: ${err.message}`);
-      if (attempt < 2) await page.waitForTimeout(1500);
+
+      if (
+        !tradingViewLoginRefreshAttempted &&
+        /インジケーターが検索結果に見つかりません|インジケーター検索入力が見つかりません|インジケーターパネルを開けませんでした/i.test(err.message || "")
+      ) {
+        if (!(TRADINGVIEW_USERNAME && TRADINGVIEW_PASSWORD)) {
+          await safeScreenshot(page, "indicator_missing_login_credentials_missing");
+          throw new Error(
+            "インジケーターが見つかりませんでした。ログイン切れの可能性がありますが、自動ログイン用の TRADINGVIEW_USERNAME または TRADINGVIEW_EMAIL と TRADINGVIEW_PASSWORD が未設定です。手動ログイン後に storage state を更新してください。"
+          );
+        }
+
+        console.warn("[indicator] Private indicator was unavailable; refreshing TradingView login once.");
+        tradingViewLoginRefreshAttempted = true;
+        await loginToTradingView(page, "private indicator unavailable", { force: true });
+        await page.waitForTimeout(1500);
+        continue;
+      }
+
+      if (attempt < 3) await page.waitForTimeout(1500);
     }
   }
 
@@ -3199,7 +3461,11 @@ async function dumpAlertTickerTexts(page) {
   let deletedAlertsThisRun = false;
 
   try {
-    reqEnv("TRADINGVIEW_STORAGE_STATE", TRADINGVIEW_STORAGE_STATE);
+    if (!TRADINGVIEW_STORAGE_STATE && !(TRADINGVIEW_USERNAME && TRADINGVIEW_PASSWORD)) {
+      throw new Error(
+        "Missing env: TRADINGVIEW_STORAGE_STATE または TRADINGVIEW_USERNAME/TRADINGVIEW_PASSWORD"
+      );
+    }
     reqEnv("WATCHLIST_1_URL", WATCHLIST_1_URL);
 
     ensureDir(WORKDIR);
@@ -3235,9 +3501,19 @@ async function dumpAlertTickerTexts(page) {
       args: ["--no-sandbox", "--disable-dev-shm-usage"],
     });
 
-    const storageState = JSON.parse(TRADINGVIEW_STORAGE_STATE);
+    let storageState = null;
+    if (TRADINGVIEW_STORAGE_STATE) {
+      try {
+        storageState = JSON.parse(TRADINGVIEW_STORAGE_STATE);
+      } catch (err) {
+        if (!(TRADINGVIEW_USERNAME && TRADINGVIEW_PASSWORD)) {
+          throw err;
+        }
+        console.warn(`[login] TRADINGVIEW_STORAGE_STATE parse failed; trying credential login instead: ${err.message}`);
+      }
+    }
     context = await browser.newContext({
-      storageState,
+      ...(storageState ? { storageState } : {}),
       viewport: { width: 1600, height: 1200 },
     });
     page = await context.newPage();
@@ -3257,9 +3533,15 @@ async function dumpAlertTickerTexts(page) {
       await closeOfferPopup(page);
     }
 
-    // ログイン状態確認（必要に応じて）
-    const needLogin = await page.getByText(/Sign in|ログイン/i).first().isVisible().catch(() => false);
-    if (needLogin) {
+    if (await ensureTradingViewLoggedIn(page)) {
+      if (await isOfferPopupVisible(page)) {
+        console.log("[offer-popup] offer popup detected after login, closing...");
+        await safeScreenshot(page, "offer_popup_after_login");
+        await closeOfferPopup(page);
+      }
+    }
+
+    if (await isTradingViewLoginRequired(page)) {
       await safeScreenshot(page, "need_login");
       throw new Error("TradingView がログイン状態ではありません");
     }
