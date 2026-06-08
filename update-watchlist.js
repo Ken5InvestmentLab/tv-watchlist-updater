@@ -34,12 +34,14 @@ const ALERT_SLOT_RELEASE_WAIT_MS = Number(process.env.ALERT_SLOT_RELEASE_WAIT_MS
 const WATCHLIST_PROMO_RETRY_MAX = Number(process.env.WATCHLIST_PROMO_RETRY_MAX || 6);
 const WATCHLIST_PROMO_RETRY_WAIT_MS = Number(process.env.WATCHLIST_PROMO_RETRY_WAIT_MS || 30000);
 const TRADINGVIEW_WATCHLIST_SYMBOL_LIMIT = Number(process.env.TRADINGVIEW_WATCHLIST_SYMBOL_LIMIT || 500);
+const TRADINGVIEW_SESSION_RECONNECT_MAX = Number(process.env.TRADINGVIEW_SESSION_RECONNECT_MAX || 3);
 
 const WORKDIR = path.resolve(process.cwd(), "tmp");
 const OUT1 = path.join(WORKDIR, "wl1.txt");
 const OUT2 = path.join(WORKDIR, "wl2.txt");
 
 let tradingViewLoginRefreshAttempted = false;
+let tradingViewSessionReconnectCount = 0;
 
 // ==============================
 // Timestamp / Names (JST)
@@ -288,7 +290,60 @@ async function findMenuItemByRole(page, nameRegex) {
   return null;
 }
 
+async function getSessionDisconnectedDialog(page) {
+  const dialogs = page.locator('[role="dialog"]');
+  const count = Math.min(await dialogs.count().catch(() => 0), 10);
+
+  for (let i = 0; i < count; i++) {
+    const dialog = dialogs.nth(i);
+    if (!(await dialog.isVisible().catch(() => false))) continue;
+
+    const text = ((await dialog.textContent().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+    if (/Session disconnected|account was accessed from another browser or device|only one active session/i.test(text)) {
+      return dialog;
+    }
+  }
+
+  return null;
+}
+
+async function reconnectTradingViewSessionIfNeeded(page) {
+  const dialog = await getSessionDisconnectedDialog(page);
+  if (!dialog) return false;
+
+  tradingViewSessionReconnectCount += 1;
+  const text = ((await dialog.textContent().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+  console.warn(
+    `[session] TradingView session disconnected (${tradingViewSessionReconnectCount}/${TRADINGVIEW_SESSION_RECONNECT_MAX}): ${text.slice(0, 300)}`
+  );
+  await safeScreenshot(page, `session_disconnected_${tradingViewSessionReconnectCount}`);
+
+  if (tradingViewSessionReconnectCount > TRADINGVIEW_SESSION_RECONNECT_MAX) {
+    throw new Error(
+      `TradingView session disconnected more than ${TRADINGVIEW_SESSION_RECONNECT_MAX} times. Avoid using the same TradingView account on another device while the updater is running.`
+    );
+  }
+
+  const connectBtn = dialog.getByRole('button', { name: /^Connect$/i }).first();
+  if (!(await connectBtn.isVisible().catch(() => false))) {
+    throw new Error("TradingView session disconnected, but the Connect button was not found.");
+  }
+
+  await connectBtn.click({ force: true, timeout: 8000 });
+  await page.waitForTimeout(2500);
+
+  if (await getSessionDisconnectedDialog(page)) {
+    throw new Error("TradingView session reconnect was attempted, but the Session disconnected dialog is still visible.");
+  }
+
+  console.log("[session] TradingView session reconnected via Connect.");
+  return true;
+}
+
 async function handleUnexpectedDialogs(page) {
+  if (await reconnectTradingViewSessionIfNeeded(page)) {
+    return true;
+  }
   // Change interval ダイアログ
   if (await isChangeIntervalDialogOpen(page)) {
     await fill4HInChangeIntervalDialog(page);
@@ -305,10 +360,17 @@ async function handleUnexpectedDialogs(page) {
     return true;
   }
   // その他「OK」だけで閉じるエラーダイアログ
-  const errorOk = page.getByRole('button', { name: /OK|閉じる|Close/i }).first();
-  if (await errorOk.isVisible().catch(() => false)) {
-    await errorOk.click();
-    return true;
+  const dialogs = page.locator('[role="dialog"]');
+  const dialogCount = Math.min(await dialogs.count().catch(() => 0), 10);
+  for (let i = 0; i < dialogCount; i++) {
+    const dialog = dialogs.nth(i);
+    if (!(await dialog.isVisible().catch(() => false))) continue;
+
+    const errorOk = dialog.getByRole('button', { name: /^(OK|閉じる|Close)$/i }).first();
+    if (await errorOk.isVisible().catch(() => false)) {
+      await errorOk.click({ force: true, timeout: 5000 });
+      return true;
+    }
   }
   return false;
 }
@@ -590,13 +652,16 @@ async function dismissWatchlistClickInterceptors(page, button) {
 
   const closeSelectors = [
     '#overlap-manager-root button[data-qa-id="close"]',
-    '#overlap-manager-root button[aria-label*="Close" i]',
-    '#overlap-manager-root [role="button"][aria-label*="Close" i]',
-    '#overlap-manager-root button[class*="close" i]',
+    '#overlap-manager-root button[aria-label="Close"]',
+    '#overlap-manager-root button[aria-label="閉じる"]',
+    '#overlap-manager-root [role="button"][aria-label="Close"]',
+    '#overlap-manager-root [role="button"][aria-label="閉じる"]',
+    '#overlap-manager-root [role="dialog"] button[class*="close" i]',
     '#overlap-manager-root [class*="closeButton"]',
     '#overlap-manager-root button:has(svg path[d*="1.5 1.5 21 21"])',
     'button[data-qa-id="close"]',
-    'button[aria-label*="Close" i]',
+    '[role="dialog"] button[aria-label="Close"]',
+    '[role="dialog"] button[aria-label="閉じる"]',
   ];
 
   for (const sel of closeSelectors) {
@@ -806,6 +871,7 @@ async function switchWatchlistTo(page, listName) {
     throw new Error(`リスト一覧に "${listName}" が見つかりません`);
   }
 
+  await handleUnexpectedDialogs(page);
   await row.click({ force: true, timeout: 8000 });
 
   // ダイアログやメニューを閉じる
@@ -816,6 +882,7 @@ async function switchWatchlistTo(page, listName) {
   // 切り替え確認（最大20秒）
   let ok = false;
   for (let i = 0; i < 20; i++) {
+    await handleUnexpectedDialogs(page).catch(() => false);
     const cur = await getCurrentWatchlistTitle(page);
     console.log(`[switch] current="${cur}", target="${listName}"`);
     if (cur === listName || cur.includes(listName)) {
