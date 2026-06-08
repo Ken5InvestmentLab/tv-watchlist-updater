@@ -176,6 +176,9 @@ jobs:
         continue-on-error: true
         env:
           TRADINGVIEW_STORAGE_STATE: ${{ secrets.TRADINGVIEW_STORAGE_STATE }}
+          TRADINGVIEW_USERNAME: ${{ secrets.TRADINGVIEW_USERNAME }}
+          TRADINGVIEW_EMAIL: ${{ secrets.TRADINGVIEW_EMAIL }}
+          TRADINGVIEW_PASSWORD: ${{ secrets.TRADINGVIEW_PASSWORD }}
           WATCHLIST_1_URL: ${{ secrets.WATCHLIST_1_URL }}
           WATCHLIST_2_URL: ${{ secrets.WATCHLIST_2_URL }}
           WATCHLIST_1_NAME: ${{ vars.WATCHLIST_1_NAME }}
