@@ -924,7 +924,8 @@ async function assertWatchlistExists(page, listName) {
 // ==============================
 // Delete watchlists
 // ==============================
-async function deleteManagedWatchlistsByPrefix(page, prefix) {
+async function deleteManagedWatchlistsByPrefix(page, prefix, options = {}) {
+  const protectedNames = new Set(options.protectedNames || []);
   console.log(`[delete] "${prefix}" で始まるウォッチリストを削除します...`);
 
   for (let round = 0; round < 80; round++) {
@@ -947,7 +948,7 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
       const dataTitle = ((await row.getAttribute("data-title").catch(() => "")) || "").trim();
       if (!dataTitle) continue;
 
-      if (isManagedListName(dataTitle, prefix)) {
+      if (isManagedListName(dataTitle, prefix) && !protectedNames.has(dataTitle)) {
         targetFound = true;
       } else if (!nonManagedTitle) {
         nonManagedTitle = dataTitle;
@@ -993,7 +994,7 @@ async function deleteManagedWatchlistsByPrefix(page, prefix) {
     for (let i = 0; i < count2; i++) {
       const row = rows2.nth(i);
       const dataTitle = ((await row.getAttribute("data-title").catch(() => "")) || "").trim();
-      if (!isManagedListName(dataTitle, prefix)) continue;
+      if (!isManagedListName(dataTitle, prefix) || protectedNames.has(dataTitle)) continue;
 
       console.log(`[delete] "${dataTitle}" を削除中... (row index ${i})`);
 
@@ -3562,6 +3563,8 @@ async function dumpAlertTickerTexts(page) {
 
     console.log(`Active watchlists: ${activeLists.length}`);
 
+    const importedFinalNames = new Set();
+
     console.log("Launching Playwright...");
     browser = await chromium.launch({
       headless: true,
@@ -3627,15 +3630,32 @@ async function dumpAlertTickerTexts(page) {
       deletedAlertsThisRun = true;
     }
 
+    if (DO_DELETE_WATCHLISTS && DO_IMPORT_WATCHLISTS && activeLists.length > 0) {
+      // TradingView は最後の作成済みウォッチリストを削除できない。
+      // 新しい1件を先に作成し、古い管理対象を削除できる状態を維持する。
+      const anchorList = activeLists[0];
+      console.log(`Importing replacement anchor before deleting old watchlists: ${anchorList.finalName}`);
+      await importWatchlistFromFile(page, anchorList.path, anchorList.finalName);
+      await assertWatchlistExists(page, anchorList.finalName);
+      importedFinalNames.add(anchorList.finalName);
+    }
+
     if (DO_DELETE_WATCHLISTS) {
       console.log("Deleting old watchlists...");
-      await deleteManagedWatchlistsByPrefix(page, WATCHLIST_1_PREFIX);
-      await deleteManagedWatchlistsByPrefix(page, WATCHLIST_2_PREFIX);
+      const protectedNames = DO_IMPORT_WATCHLISTS
+        ? activeLists.map(list => list.finalName)
+        : [];
+      await deleteManagedWatchlistsByPrefix(page, WATCHLIST_1_PREFIX, { protectedNames });
+      await deleteManagedWatchlistsByPrefix(page, WATCHLIST_2_PREFIX, { protectedNames });
     }
 
     if (DO_IMPORT_WATCHLISTS) {
       console.log("Importing watchlists...");
       for (const list of activeLists) {
+        if (importedFinalNames.has(list.finalName)) {
+          console.log(`Already imported replacement anchor: ${list.finalName}`);
+          continue;
+        }
         await importWatchlistFromFile(page, list.path, list.finalName);
         await assertWatchlistExists(page, list.finalName);
       }

@@ -24,9 +24,10 @@ This repo automates TradingView watchlist management via Playwright (headless Ch
 Single ~2700-line Node.js script. The `main` IIFE at the bottom drives the full flow:
 
 1. **Delete alerts** — `deleteManagedAlerts(page, prefixes)`: finds alert rows by ticker text prefix in the Alerts panel, clicks delete via DOM evaluation
-2. **Delete watchlists** — `deleteManagedWatchlistsByPrefix(page, prefix)`: opens the "Open list" dialog and removes watchlists matching the prefix
-3. **Import watchlists** — `importWatchlistFromFile(page, filePath, desiredName)`: triggers file upload via the "Upload list" menu item
-4. **Create alerts** — `createWatchlistAlertIfPossible(page, listName)`: switches to each new watchlist, sets chart to 4H, opens the "Add alert to list" dialog, sets condition, and submits
+2. **Import replacement anchor** — `importWatchlistFromFile(page, filePath, desiredName)`: uploads and protects one new watchlist so TradingView never sees the last created list being deleted
+3. **Delete old watchlists** — `deleteManagedWatchlistsByPrefix(page, prefix, options)`: opens the "Open list" dialog and removes matching old watchlists while preserving current-run names
+4. **Import remaining watchlists** — `importWatchlistFromFile(page, filePath, desiredName)`: uploads replacements not already used as the anchor
+5. **Create alerts** — `createWatchlistAlertIfPossible(page, listName)`: switches to each new watchlist, sets chart to 4H, opens the "Add alert to list" dialog, sets condition, and submits
 
 ### Watchlist naming convention
 
@@ -72,6 +73,8 @@ TradingView hides the delete button in the "Open list" dialog for the currently 
 2. Clicking it to switch the active watchlist (dialog closes)
 3. Reopening the dialog via the full menu flow (`openWatchlistMenuHard` → click "リストを開く")
 4. Now the managed watchlist is inactive → trash icon appears on hover
+
+TradingView also prevents deletion of the last created watchlist; built-in flagged lists such as `Red list` do not count as a replacement. When delete and import are both enabled, the main flow imports and protects one current-run watchlist before removing old managed lists.
 
 **Menu opening is fragile**  
 `openWatchlistMenuHard` retries up to 8 times with fallbacks: normal click → coordinate click at the right edge → JS `dispatchEvent`. Verify with `[data-qa-id="active-watchlist-menu"]` or `[data-role="menu"]`.

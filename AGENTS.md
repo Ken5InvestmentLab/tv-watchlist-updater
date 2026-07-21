@@ -9,7 +9,7 @@
 ## Project Shape
 
 - `update-watchlist.js` is the main Playwright automation entrypoint.
-- The script deletes managed alerts, deletes managed watchlists, imports watchlists, then creates watchlist alerts.
+- The script deletes managed alerts, imports and protects one replacement anchor, deletes old managed watchlists, imports any remaining replacements, then creates watchlist alerts.
 - Managed watchlists use `{prefix}_{YYYYMMDD_HHmm}` in JST, with default prefixes `wl1` and `wl2`.
 
 ## GitHub Actions
@@ -29,6 +29,7 @@
 
 - In the "Open list" dialog, target rows with `div[data-role="list-item"][data-title]`; plain `div[data-role="list-item"]` also matches sidebar ticker rows.
 - TradingView hides the delete button for the active watchlist; switch to a non-managed watchlist before deleting managed lists.
+- TradingView also hides deletion for the last created watchlist; built-in flagged lists such as `Red list` do not count, so import and protect one replacement anchor before deleting all old managed lists.
 - `openWatchlistMenuHard` intentionally retries multiple menu-opening strategies because the TradingView menu is fragile.
 - Before opening the watchlist menu, ensure the watchlist side panel is open and avoid using broad Watchlist aria/text selectors as the menu button; those can match the right-sidebar panel toggle.
 - When `#overlap-manager-root` intercepts clicks, clear blocking overlays/dialogs before retrying the target button; prefer short click timeouts plus fallback strategies over adding long sleeps.
