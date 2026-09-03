@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright");
+const { validateAlertWebhookUrl, configureAlertWebhook } = require("./alert-webhook");
 
 // ==============================
 // ENV
@@ -25,6 +26,7 @@ const ALERT_CONDITION_NAME =
   process.env.ALERT_CONDITION_NAME ||
   "天底極致 - 通常モード Alert用 (20, 2, 12, 75, 35, 0.18, 5, 2.5)";
 const ALERT_TIMEFRAME_LABEL = process.env.ALERT_TIMEFRAME_LABEL || "4 時間";
+const ALERT_WEBHOOK_URL = process.env.TRADINGVIEW_ALERT_WEBHOOK_URL || "";
 const ALERT_INDICATOR_SCRIPT_NAME = process.env.ALERT_INDICATOR_SCRIPT_NAME || "天底極致 - 通常モード 4H Alert Core";
 
 const NAV_TIMEOUT = 90000;
@@ -3475,6 +3477,8 @@ async function createWatchlistAlertIfPossible(page, listName) {
 
     await verifyAlertIntervalIsSameAsChart(page);
 
+    await configureAlertWebhook(page, ALERT_WEBHOOK_URL);
+
     await safeScreenshot(page, `before_alert_submit_${listName}`);
     await submitAlertDialog(page);
     await safeScreenshot(page, `after_alert_submit_${listName}`);
@@ -3535,6 +3539,7 @@ async function dumpAlertTickerTexts(page) {
       );
     }
     reqEnv("WATCHLIST_1_URL", WATCHLIST_1_URL);
+    if (DO_CREATE_WATCHLIST_ALERT) validateAlertWebhookUrl(ALERT_WEBHOOK_URL);
 
     ensureDir(WORKDIR);
 

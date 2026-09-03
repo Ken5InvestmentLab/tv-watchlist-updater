@@ -42,6 +42,7 @@ jobs:
           DO_CREATE_WATCHLIST_ALERT: "true"
           ALERT_CONDITION_NAME: ${{ vars.ALERT_CONDITION_NAME }}
           ALERT_TIMEFRAME_LABEL: ${{ vars.ALERT_TIMEFRAME_LABEL }}
+          TRADINGVIEW_ALERT_WEBHOOK_URL: ${{ secrets.TRADINGVIEW_ALERT_WEBHOOK_URL }}
         run: npm run update
 
       - name: Upload debug screenshots

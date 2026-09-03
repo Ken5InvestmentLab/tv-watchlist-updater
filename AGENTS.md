@@ -4,7 +4,7 @@
 
 - Run the updater with `npm run update` after required environment variables are set.
 - Capture a new TradingView browser session interactively with `node save-storage-state.js`.
-- There are no dedicated tests or linters; use `node --check update-watchlist.js` for syntax checks when touching the script.
+- Run `npm test` for alert-webhook regression checks and `node --check update-watchlist.js` for syntax checks when touching the updater.
 
 ## Project Shape
 
@@ -38,6 +38,7 @@
 - Handle the "One alert to track an entire watchlist" promo dialog before continuing interactions.
 - TradingView Premium watchlists are capped at 500 symbols per list; the builder must generate files within that limit. The updater must fail with a clear error instead of trimming symbols silently.
 - Before submitting a watchlist alert, verify that the alert condition dialog shows the configured `ALERT_CONDITION_NAME`; do not submit the default Price/Moving Up condition as a fallback.
+- Require `TRADINGVIEW_ALERT_WEBHOOK_URL` before deleting existing alerts/watchlists. Configure Webhook explicitly for every new alert and reopen the notification form to verify the enabled checkbox and exact URL before submitting; do not rely on TradingView remembering notification defaults. Keep the URL out of logs and committed files.
 
 ## Scope
 

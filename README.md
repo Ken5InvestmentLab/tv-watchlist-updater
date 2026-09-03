@@ -1,5 +1,17 @@
 # tv-watchlist-updater
 
+## TradingView alert webhook
+
+Set GitHub Actions secret `TRADINGVIEW_ALERT_WEBHOOK_URL` to the existing
+TradingView receiver's HTTPS URL. This is separate from the Discord webhooks
+used for workflow success/failure messages. Local runs use the same environment
+variable. Never commit the URL or browser credentials.
+
+The updater validates this configuration before deleting alerts or watchlists,
+explicitly enables Webhook on every replacement alert, and reopens the notification
+form to verify the saved URL before creating the alert. TradingView's remembered
+notification defaults are not reliable and are never used as the configuration.
+
 ## Auto-repair setup
 
 This repository is set up for API-key-free auto-repair through Codex app automation.
