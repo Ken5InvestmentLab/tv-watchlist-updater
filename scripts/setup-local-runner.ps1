@@ -58,4 +58,4 @@ try {
 }
 
 & $startScript
-Write-Output "Local TradingView runner is installed and scheduled as $taskName."
+Write-Output "Local TradingView runner is installed and will start automatically at logon."
