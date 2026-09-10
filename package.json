@@ -5,7 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "test": "node --test alert-webhook.test.js",
-    "save:state": "node scripts/save-storage-state.js",
+    "save:state": "node save-storage-state.js",
     "update": "node update-watchlist.js"
   },
   "dependencies": {},
