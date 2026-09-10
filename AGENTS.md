@@ -17,6 +17,7 @@
 - `update-tradingview.yml` is the main workflow and uploads debug screenshots from `tmp/**/*.png` as artifact `tv-debug`.
 - The main workflow runs on the local `self-hosted`, `Windows`, `tv-watchlist` runner and connects only to the loopback Edge CDP endpoint for the user's normal Edge `Default` profile. Do not move it back to a hosted runner: it cannot use the interactive TradingView session.
 - In CDP mode, create an updater-owned tab and never close or navigate the user-visible Edge window. The ignored `.local-runner/` directory and the Edge profile are local operational state, not repository artifacts.
+- `setup-local-runner.ps1` also registers the user-level `TVWatchlistEdgeCheck` task for 09:00 daily; `ensure-tradingview-edge.ps1` starts Edge only when it is fully closed and never kills an existing user Edge process.
 - `autofix.yml` runs after failed main workflow runs, creates one open `auto-fix-needed` issue, and saves screenshots to `debug/screenshots`.
 - `auto-fix-pr-trigger.yml` runs diagnostics for auto-fix PRs; keep downstream steps gated when no linked issue is found or the retry cap is reached because `exit 0` only ends the current step.
 - Do not add `openai/codex-action`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY` to GitHub Actions for auto-repair. Auto-repair is handled by the Codex app automation that checks issues every 30 minutes.
