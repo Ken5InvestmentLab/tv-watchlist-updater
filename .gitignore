@@ -1,3 +1,4 @@
 .local-runner/
+node_modules/
 storageState.json
 tmp/
