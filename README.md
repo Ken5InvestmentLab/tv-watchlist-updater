@@ -61,6 +61,10 @@ logged-in normal Chrome profile. The builder's
 existing `build_complete` event then runs the updater locally with the same
 GitHub secrets as before.
 
+If the normal profile is not signed in but a freshly captured local
+`storageState.json` is available, run `node scripts/seed-local-chrome-session.js`
+once to restore the TradingView session into the local Chrome profile.
+
 The updater creates its own tab and never closes the user-visible Chrome
 window. If another device disconnects the TradingView session, it detects the
 `Session disconnected` dialog and clicks `Connect` up to three times.
