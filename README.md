@@ -49,14 +49,15 @@ If TradingView asks for 2FA/CAPTCHA, run `node save-storage-state.js` locally an
 ## Local Chrome execution
 
 The daily updater runs on this PC through a self-hosted GitHub Actions runner. It
-connects to a dedicated, normal Google Chrome profile at `127.0.0.1:9222`; it
+connects to your normal Google Chrome `Default` profile at `127.0.0.1:9222`; it
 does not launch an automated Chromium browser or upload that profile to GitHub.
 
 Run `powershell -ExecutionPolicy Bypass -File scripts/setup-local-runner.ps1`
 once from this repository. It downloads and registers the runner, starts the
 ordinary Chrome profile, and schedules both at logon and 09:05 JST. If Windows
 does not grant task-creation access, it installs a per-user Startup launcher
-instead. Sign in to TradingView in that Chrome window once. The builder's
+instead. Close all Chrome windows once, run the launcher, and use the already
+logged-in normal Chrome profile. The builder's
 existing `build_complete` event then runs the updater locally with the same
 GitHub secrets as before.
 

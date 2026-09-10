@@ -15,7 +15,7 @@
 ## GitHub Actions
 
 - `update-tradingview.yml` is the main workflow and uploads debug screenshots from `tmp/**/*.png` as artifact `tv-debug`.
-- The main workflow runs on the local `self-hosted`, `Windows`, `tv-watchlist` runner and connects only to the loopback Chrome CDP endpoint. Do not move it back to a hosted runner: it cannot use the interactive TradingView session.
+- The main workflow runs on the local `self-hosted`, `Windows`, `tv-watchlist` runner and connects only to the loopback Chrome CDP endpoint for the user's normal Chrome `Default` profile. Do not move it back to a hosted runner: it cannot use the interactive TradingView session.
 - In CDP mode, create an updater-owned tab and never close or navigate the user-visible Chrome window. The ignored `.local-runner/` directory and the Chrome profile are local operational state, not repository artifacts.
 - `autofix.yml` runs after failed main workflow runs, creates one open `auto-fix-needed` issue, and saves screenshots to `debug/screenshots`.
 - `auto-fix-pr-trigger.yml` runs diagnostics for auto-fix PRs; keep downstream steps gated when no linked issue is found or the retry cap is reached because `exit 0` only ends the current step.

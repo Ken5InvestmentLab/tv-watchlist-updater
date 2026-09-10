@@ -22,13 +22,19 @@ $chromeCandidates = @(
 $chrome = $chromeCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 if (-not $chrome) { throw "Google Chrome was not found." }
 
-$profileDir = Join-Path $env:LOCALAPPDATA "TradingViewAutomationChrome"
-New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
+$profileDir = Join-Path $env:LOCALAPPDATA "Google\Chrome\User Data"
+if (-not (Test-Path -LiteralPath $profileDir)) { throw "The normal Google Chrome profile directory was not found." }
+
+$runningChrome = Get-Process chrome -ErrorAction SilentlyContinue
+if ($runningChrome) {
+  throw "Close all normal Chrome windows once, then run this launcher again so Chrome can start with local debugging enabled."
+}
 
 Start-Process -FilePath $chrome -ArgumentList @(
   "--remote-debugging-address=127.0.0.1",
   "--remote-debugging-port=$DebugPort",
   "--user-data-dir=$profileDir",
+  "--profile-directory=Default",
   "https://www.tradingview.com/chart/"
 )
 
