@@ -45,3 +45,19 @@ The updater first uses `TRADINGVIEW_STORAGE_STATE`. If that session is no longer
 - `TRADINGVIEW_PASSWORD`
 
 If TradingView asks for 2FA/CAPTCHA, run `node save-storage-state.js` locally and update `TRADINGVIEW_STORAGE_STATE` instead.
+
+## Local Chrome execution
+
+The daily updater runs on this PC through a self-hosted GitHub Actions runner. It
+connects to a dedicated, normal Google Chrome profile at `127.0.0.1:9222`; it
+does not launch an automated Chromium browser or upload that profile to GitHub.
+
+Run `powershell -ExecutionPolicy Bypass -File scripts/setup-local-runner.ps1`
+once from this repository. It downloads and registers the runner, starts the
+ordinary Chrome profile, and schedules both at logon and 09:05 JST. Sign in to
+TradingView in that Chrome window once. The builder's existing `build_complete`
+event then runs the updater locally with the same GitHub secrets as before.
+
+The updater creates its own tab and never closes the user-visible Chrome
+window. If another device disconnects the TradingView session, it detects the
+`Session disconnected` dialog and clicks `Connect` up to three times.

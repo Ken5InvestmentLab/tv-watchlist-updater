@@ -28,6 +28,7 @@ const ALERT_CONDITION_NAME =
 const ALERT_TIMEFRAME_LABEL = process.env.ALERT_TIMEFRAME_LABEL || "4 時間";
 const ALERT_WEBHOOK_URL = process.env.TRADINGVIEW_ALERT_WEBHOOK_URL || "";
 const ALERT_INDICATOR_SCRIPT_NAME = process.env.ALERT_INDICATOR_SCRIPT_NAME || "天底極致 - 通常モード 4H Alert Core";
+const TRADINGVIEW_CDP_URL = (process.env.TRADINGVIEW_CDP_URL || "").trim();
 
 const NAV_TIMEOUT = 90000;
 const STEP_TIMEOUT = 45000;
@@ -44,6 +45,26 @@ const OUT2 = path.join(WORKDIR, "wl2.txt");
 
 let tradingViewLoginRefreshAttempted = false;
 let tradingViewSessionReconnectCount = 0;
+
+function validateLocalCdpUrl(value) {
+  if (!value) return "";
+
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("TRADINGVIEW_CDP_URL must be a valid local HTTP URL");
+  }
+
+  if (
+    url.protocol !== "http:" ||
+    !["127.0.0.1", "localhost", "::1"].includes(url.hostname)
+  ) {
+    throw new Error("TRADINGVIEW_CDP_URL must point to a local Chrome debugging endpoint");
+  }
+
+  return url.toString().replace(/\/$/, "");
+}
 
 // ==============================
 // Timestamp / Names (JST)
@@ -3531,11 +3552,13 @@ async function dumpAlertTickerTexts(page) {
   let context;
   let page;
   let deletedAlertsThisRun = false;
+  const localCdpUrl = validateLocalCdpUrl(TRADINGVIEW_CDP_URL);
+  const usesLocalChrome = Boolean(localCdpUrl);
 
   try {
-    if (!TRADINGVIEW_STORAGE_STATE && !(TRADINGVIEW_USERNAME && TRADINGVIEW_PASSWORD)) {
+    if (!usesLocalChrome && !TRADINGVIEW_STORAGE_STATE && !(TRADINGVIEW_USERNAME && TRADINGVIEW_PASSWORD)) {
       throw new Error(
-        "Missing env: TRADINGVIEW_STORAGE_STATE または TRADINGVIEW_USERNAME/TRADINGVIEW_PASSWORD"
+        "Missing env: TRADINGVIEW_CDP_URL または TRADINGVIEW_STORAGE_STATE または TRADINGVIEW_USERNAME/TRADINGVIEW_PASSWORD"
       );
     }
     reqEnv("WATCHLIST_1_URL", WATCHLIST_1_URL);
@@ -3570,28 +3593,39 @@ async function dumpAlertTickerTexts(page) {
 
     const importedFinalNames = new Set();
 
-    console.log("Launching Playwright...");
-    browser = await chromium.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-dev-shm-usage"],
-    });
-
-    let storageState = null;
-    if (TRADINGVIEW_STORAGE_STATE) {
-      try {
-        storageState = JSON.parse(TRADINGVIEW_STORAGE_STATE);
-      } catch (err) {
-        if (!(TRADINGVIEW_USERNAME && TRADINGVIEW_PASSWORD)) {
-          throw err;
-        }
-        console.warn(`[login] TRADINGVIEW_STORAGE_STATE parse failed; trying credential login instead: ${err.message}`);
+    if (usesLocalChrome) {
+      console.log("Connecting to the local Chrome debugging endpoint...");
+      browser = await chromium.connectOverCDP(localCdpUrl);
+      context = browser.contexts()[0];
+      if (!context) {
+        throw new Error("Local Chrome has no browser context. Start the dedicated TradingView Chrome profile first.");
       }
+      // Always use an updater-owned tab. Do not navigate or close a tab that the user is using.
+      page = await context.newPage();
+    } else {
+      console.log("Launching Playwright...");
+      browser = await chromium.launch({
+        headless: true,
+        args: ["--no-sandbox", "--disable-dev-shm-usage"],
+      });
+
+      let storageState = null;
+      if (TRADINGVIEW_STORAGE_STATE) {
+        try {
+          storageState = JSON.parse(TRADINGVIEW_STORAGE_STATE);
+        } catch (err) {
+          if (!(TRADINGVIEW_USERNAME && TRADINGVIEW_PASSWORD)) {
+            throw err;
+          }
+          console.warn(`[login] TRADINGVIEW_STORAGE_STATE parse failed; trying credential login instead: ${err.message}`);
+        }
+      }
+      context = await browser.newContext({
+        ...(storageState ? { storageState } : {}),
+        viewport: { width: 1600, height: 1200 },
+      });
+      page = await context.newPage();
     }
-    context = await browser.newContext({
-      ...(storageState ? { storageState } : {}),
-      viewport: { width: 1600, height: 1200 },
-    });
-    page = await context.newPage();
 
     page.setDefaultTimeout(STEP_TIMEOUT);
     page.setDefaultNavigationTimeout(NAV_TIMEOUT);
@@ -3600,6 +3634,12 @@ async function dumpAlertTickerTexts(page) {
     await page.goto("https://www.tradingview.com/chart/", { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle").catch(() => { });
     await waitForTradingViewReady(page);  // 新しい関数を使用
+
+    // A different device can invalidate the TradingView session while this
+    // dedicated local Chrome remains open. Reclaim it before any mutation.
+    if (await reconnectTradingViewSessionIfNeeded(page)) {
+      await waitForTradingViewReady(page);
+    }
 
     // オファー / フラッシュセール ポップアップを proactive に閉じる
     if (await isOfferPopupVisible(page)) {
@@ -3687,14 +3727,14 @@ async function dumpAlertTickerTexts(page) {
 
     console.log("DONE.");
     await safeScreenshot(page, "done");
-    await browser.close();
+    if (!usesLocalChrome) await browser.close();
   } catch (err) {
     console.error("FAILED:", err?.message || err);
     if (page) {
       await debugDump(page, "final_error");
       await safeScreenshot(page, "failed");
     }
-    if (browser) await browser.close().catch(() => { });
+    if (browser && !usesLocalChrome) await browser.close().catch(() => { });
     process.exit(1);
   }
 })();

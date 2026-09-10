@@ -11,7 +11,9 @@ concurrency:
 
 jobs:
   run:
-    runs-on: ubuntu-latest
+    # A normal local Chrome profile is used via CDP. GitHub-hosted runners
+    # cannot access that interactive profile or its TradingView session.
+    runs-on: [self-hosted, Windows, tv-watchlist]
     timeout-minutes: 25
 
     steps:
@@ -22,9 +24,10 @@ jobs:
           node-version: "20"
 
       - name: Install deps
+        shell: pwsh
         run: |
-          npm ci || npm i
-          npx playwright install --with-deps
+          npm ci
+          if ($LASTEXITCODE -ne 0) { npm i }
 
       - name: Run updater
         env:
@@ -43,6 +46,7 @@ jobs:
           ALERT_CONDITION_NAME: ${{ vars.ALERT_CONDITION_NAME }}
           ALERT_TIMEFRAME_LABEL: ${{ vars.ALERT_TIMEFRAME_LABEL }}
           TRADINGVIEW_ALERT_WEBHOOK_URL: ${{ secrets.TRADINGVIEW_ALERT_WEBHOOK_URL }}
+          TRADINGVIEW_CDP_URL: http://127.0.0.1:9222
         run: npm run update
 
       - name: Upload debug screenshots
@@ -55,87 +59,26 @@ jobs:
 
       - name: Notify Discord on Success
         if: success()
+        shell: pwsh
+        env:
+          DISCORD_WEBHOOK_1: ${{ secrets.DISCORD_WEBHOOK_1 }}
+          DISCORD_WEBHOOK_2: ${{ secrets.DISCORD_WEBHOOK_2 }}
         run: |
-          payload='{
-            "username": "System Log",
-            "content": "🟢 **[System] Browser Automation Success**",
-            "embeds": [{
-              "title": "Update Completed",
-              "description": "TradingViewのウォッチリストとアラートの更新がすべて完了しました！",
-              "color": 65280
-            }]
-          }'
-
-          notify_failed=0
-
-          send_webhook() {
-            local url="$1"
-            local name="$2"
-            if [ -z "$url" ]; then
-              echo "::warning::$name is empty. Skip."
-              return 0
-            fi
-            echo "Sending to $name ..."
-            if ! curl --fail --silent --show-error \
-              -H "Content-Type: application/json" \
-              -X POST \
-              -d "$payload" \
-              "$url"; then
-              echo "::warning::Failed to send Discord notification: $name"
-              notify_failed=1
-            else
-              echo "Success: $name"
-            fi
-            return 0
+          $payload = @{ username = "System Log"; content = "🟢 **[System] Browser Automation Success**"; embeds = @(@{ title = "Update Completed"; description = "TradingViewのウォッチリストとアラートの更新がすべて完了しました！"; color = 65280 }) } | ConvertTo-Json -Depth 4 -Compress
+          foreach ($item in @(@{ Name = "DISCORD_WEBHOOK_1"; Url = $env:DISCORD_WEBHOOK_1 }, @{ Name = "DISCORD_WEBHOOK_2"; Url = $env:DISCORD_WEBHOOK_2 })) {
+            if ([string]::IsNullOrWhiteSpace($item.Url)) { Write-Warning "$($item.Name) is empty. Skip."; continue }
+            try { Invoke-RestMethod -Method Post -Uri $item.Url -ContentType "application/json" -Body $payload | Out-Null } catch { Write-Warning "Failed to send Discord notification: $($item.Name)" }
           }
-
-          send_webhook "${{ secrets.DISCORD_WEBHOOK_1 }}" "DISCORD_WEBHOOK_1"
-          send_webhook "${{ secrets.DISCORD_WEBHOOK_2 }}" "DISCORD_WEBHOOK_2"
-
-          if [ "$notify_failed" -ne 0 ]; then
-            echo "::warning::One or more Discord notifications failed, but workflow will continue."
-          fi
 
       - name: Notify Discord on Failure
         if: failure()
+        shell: pwsh
+        env:
+          DISCORD_WEBHOOK_1: ${{ secrets.DISCORD_WEBHOOK_1 }}
+          DISCORD_WEBHOOK_2: ${{ secrets.DISCORD_WEBHOOK_2 }}
         run: |
-          payload='{
-            "username": "System Log",
-            "content": "🔴 **[System] Browser Automation Error**",
-            "embeds": [{
-              "title": "Playwright Error Log",
-              "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-              "description": "TradingViewの操作中にエラーが発生しました。UI変更の可能性があります。",
-              "color": 16711680
-            }]
-          }'
-
-          notify_failed=0
-
-          send_webhook() {
-            local url="$1"
-            local name="$2"
-            if [ -z "$url" ]; then
-              echo "::warning::$name is empty. Skip."
-              return 0
-            fi
-            echo "Sending to $name ..."
-            if ! curl --fail --silent --show-error \
-              -H "Content-Type: application/json" \
-              -X POST \
-              -d "$payload" \
-              "$url"; then
-              echo "::warning::Failed to send Discord failure notification: $name"
-              notify_failed=1
-            else
-              echo "Success: $name"
-            fi
-            return 0
+          $payload = @{ username = "System Log"; content = "🔴 **[System] Browser Automation Error**"; embeds = @(@{ title = "Playwright Error Log"; url = "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"; description = "TradingViewの操作中にエラーが発生しました。UI変更の可能性があります。"; color = 16711680 }) } | ConvertTo-Json -Depth 4 -Compress
+          foreach ($item in @(@{ Name = "DISCORD_WEBHOOK_1"; Url = $env:DISCORD_WEBHOOK_1 }, @{ Name = "DISCORD_WEBHOOK_2"; Url = $env:DISCORD_WEBHOOK_2 })) {
+            if ([string]::IsNullOrWhiteSpace($item.Url)) { Write-Warning "$($item.Name) is empty. Skip."; continue }
+            try { Invoke-RestMethod -Method Post -Uri $item.Url -ContentType "application/json" -Body $payload | Out-Null } catch { Write-Warning "Failed to send Discord notification: $($item.Name)" }
           }
-
-          send_webhook "${{ secrets.DISCORD_WEBHOOK_1 }}" "DISCORD_WEBHOOK_1"
-          send_webhook "${{ secrets.DISCORD_WEBHOOK_2 }}" "DISCORD_WEBHOOK_2"
-
-          if [ "$notify_failed" -ne 0 ]; then
-            echo "::warning::One or more Discord failure notifications failed."
-          fi
