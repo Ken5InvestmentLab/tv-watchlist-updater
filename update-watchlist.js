@@ -1142,70 +1142,6 @@ async function recoverLoginFromWatchlistUploadBlocker(page) {
   return true;
 }
 
-async function assertTradingViewMutationAuthReady(page) {
-  console.log("[auth-preflight] Verifying signed-in watchlist upload access before destructive changes...");
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await closeOpenListDialogIfVisible(page).catch(() => { });
-    await closeAnyMenu(page).catch(() => { });
-    await page.waitForTimeout(300);
-
-    const opened = await openWatchlistMenuHard(page, 4);
-    if (!opened) {
-      await safeScreenshot(page, "auth_preflight_menu_not_opened");
-      throw new Error("TradingView の認証事前確認でウォッチリストメニューを開けませんでした");
-    }
-
-    const chooserPromise = page.waitForEvent("filechooser", { timeout: 6000 }).catch(() => null);
-    const inputPromise = page
-      .locator('input[type="file"]')
-      .first()
-      .waitFor({ state: "attached", timeout: 6000 })
-      .then(() => true)
-      .catch(() => false);
-
-    await clickUploadList(page);
-
-    const [chooser, hasInput] = await Promise.all([chooserPromise, inputPromise]);
-
-    if (chooser || hasInput) {
-      await page.keyboard.press("Escape").catch(() => { });
-      await closeAnyMenu(page).catch(() => { });
-      console.log("[auth-preflight] TradingView watchlist upload access confirmed.");
-      return true;
-    }
-
-    const blocked =
-      (await isWatchlistPromoLoginStateVisible(page)) ||
-      (await isTradingViewLoginRequired(page));
-
-    if (blocked) {
-      const blockerText = (await getWatchlistPromoDialogText(page))
-        .replace(/\s+/g, " ")
-        .slice(0, 500);
-      console.warn(`[auth-preflight] TradingView session is not usable: ${blockerText}`);
-      await safeScreenshot(page, "auth_preflight_login_required");
-      await closeWatchlistPromoDialog(page).catch(() => false);
-
-      if (attempt === 0) {
-        await loginToTradingView(page, "preflight watchlist upload requires signed-in plan", { force: true });
-        continue;
-      }
-
-      throw new Error(
-        "TradingView のログインセッションが無効です。TRADINGVIEW_STORAGE_STATE を更新してください。"
-      );
-    }
-
-    await safeScreenshot(page, "auth_preflight_unconfirmed");
-    throw new Error(
-      "TradingView の認証状態を安全に確認できませんでした。削除処理は実行していません。"
-    );
-  }
-
-  throw new Error("TradingView の認証事前確認に失敗しました");
-}
-
 async function uploadWatchlistPathViaMenu(page, uploadPath, options = {}) {
   console.log("Uploading file:", uploadPath);
   console.log("File exists:", fs.existsSync(uploadPath));
@@ -3683,16 +3619,6 @@ async function dumpAlertTickerTexts(page) {
     if (await isTradingViewLoginRequired(page)) {
       await safeScreenshot(page, "need_login");
       throw new Error("TradingView がログイン状態ではありません");
-    }
-
-    const needsAuthenticatedMutation =
-      DO_DELETE_ALERTS ||
-      DO_DELETE_WATCHLISTS ||
-      DO_IMPORT_WATCHLISTS ||
-      DO_CREATE_WATCHLIST_ALERT;
-
-    if (needsAuthenticatedMutation) {
-      await assertTradingViewMutationAuthReady(page);
     }
 
     if (DO_DELETE_ALERTS) {
