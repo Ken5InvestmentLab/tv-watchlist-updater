@@ -13,9 +13,12 @@ function Install-StartupLauncher {
   $startupDir = [Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)
   $launcherPath = Join-Path $startupDir "TVWatchlistLocalRunner.cmd"
   $startScript = Join-Path $PSScriptRoot "start-local-runner.ps1"
+  # Startup .cmd files are written as ASCII here. Encode the PowerShell command
+  # as UTF-16LE base64 so Japanese characters in the repository path survive.
+  $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes("& '$($startScript.Replace("'", "''"))'"))
   @"
 @echo off
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$startScript"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedCommand
 "@ | Set-Content -LiteralPath $launcherPath -Encoding ascii
   Write-Warning "Task Scheduler access was denied. Installed the per-user Startup launcher instead: $launcherPath"
 }
