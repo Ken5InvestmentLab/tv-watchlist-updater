@@ -46,25 +46,25 @@ The updater first uses `TRADINGVIEW_STORAGE_STATE`. If that session is no longer
 
 If TradingView asks for 2FA/CAPTCHA, run `node save-storage-state.js` locally and update `TRADINGVIEW_STORAGE_STATE` instead.
 
-## Local Chrome execution
+## Local Edge execution
 
 The daily updater runs on this PC through a self-hosted GitHub Actions runner. It
-connects to your normal Google Chrome `Default` profile at `127.0.0.1:9222`; it
+connects to your normal Microsoft Edge `Default` profile at `127.0.0.1:9223`; it
 does not launch an automated Chromium browser or upload that profile to GitHub.
 
 Run `powershell -ExecutionPolicy Bypass -File scripts/setup-local-runner.ps1`
 once from this repository. It downloads and registers the runner, starts the
-ordinary Chrome profile, and schedules both at logon and 09:05 JST. If Windows
+ordinary Edge profile, and schedules both at logon and 09:05 JST. If Windows
 does not grant task-creation access, it installs a per-user Startup launcher
-instead. Close all Chrome windows once, run the launcher, and use the already
-logged-in normal Chrome profile. The builder's
+instead. Close all Edge windows once, run the launcher, and use the already
+logged-in normal Edge profile. The builder's
 existing `build_complete` event then runs the updater locally with the same
 GitHub secrets as before.
 
 If the normal profile is not signed in but a freshly captured local
 `storageState.json` is available, run `node scripts/seed-local-chrome-session.js`
-once to restore the TradingView session into the local Chrome profile.
+once to restore the TradingView session into the local Edge profile.
 
-The updater creates its own tab and never closes the user-visible Chrome
+The updater creates its own tab and never closes the user-visible Edge
 window. If another device disconnects the TradingView session, it detects the
 `Session disconnected` dialog and clicks `Connect` up to three times.

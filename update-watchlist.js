@@ -60,7 +60,7 @@ function validateLocalCdpUrl(value) {
     url.protocol !== "http:" ||
     !["127.0.0.1", "localhost", "::1"].includes(url.hostname)
   ) {
-    throw new Error("TRADINGVIEW_CDP_URL must point to a local Chrome debugging endpoint");
+    throw new Error("TRADINGVIEW_CDP_URL must point to a local Edge debugging endpoint");
   }
 
   return url.toString().replace(/\/$/, "");
@@ -3553,10 +3553,10 @@ async function dumpAlertTickerTexts(page) {
   let page;
   let deletedAlertsThisRun = false;
   const localCdpUrl = validateLocalCdpUrl(TRADINGVIEW_CDP_URL);
-  const usesLocalChrome = Boolean(localCdpUrl);
+  const usesLocalEdge = Boolean(localCdpUrl);
 
   try {
-    if (!usesLocalChrome && !TRADINGVIEW_STORAGE_STATE && !(TRADINGVIEW_USERNAME && TRADINGVIEW_PASSWORD)) {
+    if (!usesLocalEdge && !TRADINGVIEW_STORAGE_STATE && !(TRADINGVIEW_USERNAME && TRADINGVIEW_PASSWORD)) {
       throw new Error(
         "Missing env: TRADINGVIEW_CDP_URL または TRADINGVIEW_STORAGE_STATE または TRADINGVIEW_USERNAME/TRADINGVIEW_PASSWORD"
       );
@@ -3593,12 +3593,12 @@ async function dumpAlertTickerTexts(page) {
 
     const importedFinalNames = new Set();
 
-    if (usesLocalChrome) {
-      console.log("Connecting to the local Chrome debugging endpoint...");
+    if (usesLocalEdge) {
+      console.log("Connecting to the local Edge debugging endpoint...");
       browser = await chromium.connectOverCDP(localCdpUrl);
       context = browser.contexts()[0];
       if (!context) {
-        throw new Error("Local Chrome has no browser context. Start the dedicated TradingView Chrome profile first.");
+        throw new Error("Local Edge has no browser context. Start the normal TradingView Edge profile first.");
       }
       // Always use an updater-owned tab. Do not navigate or close a tab that the user is using.
       page = await context.newPage();
@@ -3636,7 +3636,7 @@ async function dumpAlertTickerTexts(page) {
     await waitForTradingViewReady(page);  // 新しい関数を使用
 
     // A different device can invalidate the TradingView session while this
-    // dedicated local Chrome remains open. Reclaim it before any mutation.
+    // The local Edge remains open. Reclaim the TradingView session before any mutation.
     if (await reconnectTradingViewSessionIfNeeded(page)) {
       await waitForTradingViewReady(page);
     }
@@ -3727,14 +3727,14 @@ async function dumpAlertTickerTexts(page) {
 
     console.log("DONE.");
     await safeScreenshot(page, "done");
-    if (!usesLocalChrome) await browser.close();
+    if (!usesLocalEdge) await browser.close();
   } catch (err) {
     console.error("FAILED:", err?.message || err);
     if (page) {
       await debugDump(page, "final_error");
       await safeScreenshot(page, "failed");
     }
-    if (browser && !usesLocalChrome) await browser.close().catch(() => { });
+    if (browser && !usesLocalEdge) await browser.close().catch(() => { });
     process.exit(1);
   }
 })();

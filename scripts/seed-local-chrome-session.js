@@ -13,9 +13,10 @@ if (!statePath) {
 
 (async () => {
   const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
-  const browser = await chromium.connectOverCDP("http://127.0.0.1:9222");
+  const cdpUrl = process.env.TRADINGVIEW_CDP_URL || "http://127.0.0.1:9223";
+  const browser = await chromium.connectOverCDP(cdpUrl);
   const context = browser.contexts()[0];
-  if (!context) throw new Error("The local Chrome debugging endpoint has no browser context.");
+  if (!context) throw new Error("The local Edge debugging endpoint has no browser context.");
 
   await context.addCookies(state.cookies || []);
   for (const origin of state.origins || []) {
@@ -32,7 +33,7 @@ if (!statePath) {
   await page.goto("https://www.tradingview.com/chart/", { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(2500);
   console.log(JSON.stringify({ url: page.url(), title: await page.title() }));
-  // Keep Chrome open; the updater owns only this tab.
+  // Keep Edge open; the updater owns only this tab.
   process.exit(0);
 })().catch((error) => {
   console.error(error.message);

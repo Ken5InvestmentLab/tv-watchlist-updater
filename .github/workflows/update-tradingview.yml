@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   run:
-    # A normal local Chrome profile is used via CDP. GitHub-hosted runners
+    # A normal local Edge profile is used via CDP. GitHub-hosted runners
     # cannot access that interactive profile or its TradingView session.
     runs-on: [self-hosted, Windows, tv-watchlist]
     timeout-minutes: 25
@@ -46,7 +46,7 @@ jobs:
           ALERT_CONDITION_NAME: ${{ vars.ALERT_CONDITION_NAME }}
           ALERT_TIMEFRAME_LABEL: ${{ vars.ALERT_TIMEFRAME_LABEL }}
           TRADINGVIEW_ALERT_WEBHOOK_URL: ${{ secrets.TRADINGVIEW_ALERT_WEBHOOK_URL }}
-          TRADINGVIEW_CDP_URL: http://127.0.0.1:9222
+          TRADINGVIEW_CDP_URL: http://127.0.0.1:9223
         run: npm run update
 
       - name: Upload debug screenshots

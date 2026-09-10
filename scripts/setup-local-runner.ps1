@@ -52,7 +52,7 @@ $dailyTrigger = New-ScheduledTaskTrigger -Daily -At "09:05"
 $triggers = @($logonTrigger, $dailyTrigger)
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -ExecutionTimeLimit (New-TimeSpan -Hours 1)
 try {
-  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Settings $settings -Description "Starts the local Chrome and GitHub Actions runner for TradingView watchlist updates." -Force | Out-Null
+  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Settings $settings -Description "Starts Microsoft Edge and the GitHub Actions runner for TradingView watchlist updates." -Force | Out-Null
 } catch {
   Install-StartupLauncher
 }
