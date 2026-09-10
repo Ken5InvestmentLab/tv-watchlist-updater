@@ -23,6 +23,18 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedComman
   Write-Warning "Task Scheduler access was denied. Installed the per-user Startup launcher instead: $launcherPath"
 }
 
+function Install-EdgeCheckTask {
+  $edgeCheckTaskName = "TVWatchlistEdgeCheck"
+  $edgeCheckScript = Join-Path $PSScriptRoot "ensure-tradingview-edge.ps1"
+  $taskAction = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$edgeCheckScript`""
+  & schtasks.exe /Create /TN $edgeCheckTaskName /SC DAILY /ST "09:00" /TR $taskAction /F | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Could not register the 09:00 Edge check task. Run scripts/ensure-tradingview-edge.ps1 manually when needed."
+    return
+  }
+  Write-Output "Registered daily Edge check task at 09:00: $edgeCheckTaskName"
+}
+
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
   throw "GitHub CLI (gh) is required to register the local runner."
 }
@@ -59,6 +71,8 @@ try {
 } catch {
   Install-StartupLauncher
 }
+
+Install-EdgeCheckTask
 
 & $startScript
 Write-Output "Local TradingView runner is installed and will start automatically at logon."
