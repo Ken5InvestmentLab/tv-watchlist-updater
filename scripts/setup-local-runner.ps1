@@ -9,6 +9,17 @@ $runnerRoot = Join-Path $repoRoot ".local-runner"
 $repo = "Ken5InvestmentLab/tv-watchlist-updater"
 $taskName = "TVWatchlistLocalRunner"
 
+function Install-StartupLauncher {
+  $startupDir = [Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)
+  $launcherPath = Join-Path $startupDir "TVWatchlistLocalRunner.cmd"
+  $startScript = Join-Path $PSScriptRoot "start-local-runner.ps1"
+  @"
+@echo off
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$startScript"
+"@ | Set-Content -LiteralPath $launcherPath -Encoding ascii
+  Write-Warning "Task Scheduler access was denied. Installed the per-user Startup launcher instead: $launcherPath"
+}
+
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
   throw "GitHub CLI (gh) is required to register the local runner."
 }
@@ -40,7 +51,11 @@ $logonTrigger = New-ScheduledTaskTrigger -AtLogOn
 $dailyTrigger = New-ScheduledTaskTrigger -Daily -At "09:05"
 $triggers = @($logonTrigger, $dailyTrigger)
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -ExecutionTimeLimit (New-TimeSpan -Hours 1)
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Settings $settings -Description "Starts the local Chrome and GitHub Actions runner for TradingView watchlist updates." -Force | Out-Null
+try {
+  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Settings $settings -Description "Starts the local Chrome and GitHub Actions runner for TradingView watchlist updates." -Force | Out-Null
+} catch {
+  Install-StartupLauncher
+}
 
 & $startScript
 Write-Output "Local TradingView runner is installed and scheduled as $taskName."

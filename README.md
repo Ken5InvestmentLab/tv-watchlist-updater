@@ -54,9 +54,11 @@ does not launch an automated Chromium browser or upload that profile to GitHub.
 
 Run `powershell -ExecutionPolicy Bypass -File scripts/setup-local-runner.ps1`
 once from this repository. It downloads and registers the runner, starts the
-ordinary Chrome profile, and schedules both at logon and 09:05 JST. Sign in to
-TradingView in that Chrome window once. The builder's existing `build_complete`
-event then runs the updater locally with the same GitHub secrets as before.
+ordinary Chrome profile, and schedules both at logon and 09:05 JST. If Windows
+does not grant task-creation access, it installs a per-user Startup launcher
+instead. Sign in to TradingView in that Chrome window once. The builder's
+existing `build_complete` event then runs the updater locally with the same
+GitHub secrets as before.
 
 The updater creates its own tab and never closes the user-visible Chrome
 window. If another device disconnects the TradingView session, it detects the
