@@ -4078,14 +4078,27 @@ async function dumpAlertTickerTexts(page) {
 
     console.log("DONE.");
     await safeScreenshot(page, "done");
-    if (!usesLocalEdge) await browser.close();
+    if (usesLocalEdge) {
+      // Keep the user's normal Edge window and tabs intact. Only close the
+      // updater-owned tab, then release Playwright's CDP websocket so the
+      // self-hosted runner can finish the step instead of hanging after DONE.
+      await page.close().catch(() => { });
+      if (typeof browser?.disconnect === "function") browser.disconnect();
+    } else {
+      await browser.close();
+    }
   } catch (err) {
     console.error("FAILED:", err?.message || err);
     if (page) {
       await debugDump(page, "final_error");
       await safeScreenshot(page, "failed");
     }
-    if (browser && !usesLocalEdge) await browser.close().catch(() => { });
+    if (usesLocalEdge) {
+      await page?.close().catch(() => { });
+      if (typeof browser?.disconnect === "function") browser.disconnect();
+    } else if (browser) {
+      await browser.close().catch(() => { });
+    }
     process.exit(1);
   }
 })();
