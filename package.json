@@ -4,7 +4,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "test": "node --test alert-webhook.test.js",
+    "test": "node --test alert-webhook.test.js alert-delete-logic.test.js",
     "save:state": "node scripts/save-storage-state.js",
     "update": "node update-watchlist.js"
   },

@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright");
 const { validateAlertWebhookUrl, configureAlertWebhook } = require("./alert-webhook");
+const { countAlertText, hasAlertDeletionProgress } = require("./alert-delete-logic");
 
 // ==============================
 // ENV
@@ -38,6 +39,9 @@ const WATCHLIST_PROMO_RETRY_MAX = Number(process.env.WATCHLIST_PROMO_RETRY_MAX |
 const WATCHLIST_PROMO_RETRY_WAIT_MS = Number(process.env.WATCHLIST_PROMO_RETRY_WAIT_MS || 30000);
 const TRADINGVIEW_WATCHLIST_SYMBOL_LIMIT = Number(process.env.TRADINGVIEW_WATCHLIST_SYMBOL_LIMIT || 500);
 const TRADINGVIEW_SESSION_RECONNECT_MAX = Number(process.env.TRADINGVIEW_SESSION_RECONNECT_MAX || 3);
+const ALERT_DELETE_PRIMARY_VERIFY_MS = Number(process.env.ALERT_DELETE_PRIMARY_VERIFY_MS || 4000);
+const ALERT_DELETE_TOTAL_VERIFY_MS = Number(process.env.ALERT_DELETE_TOTAL_VERIFY_MS || 15000);
+const ALERT_DELETE_POLL_MS = Number(process.env.ALERT_DELETE_POLL_MS || 750);
 
 const WORKDIR = path.resolve(process.cwd(), "tmp");
 const OUT1 = path.join(WORKDIR, "wl1.txt");
@@ -1688,7 +1692,54 @@ async function getAllAlertTickerTexts(page) {
   }
 
   console.log("Detected alert ticker count:", arr.length);
+  console.log(`[alerts] visible ticker texts: ${JSON.stringify(arr)}`);
   return arr;
+}
+
+async function getAlertDomNodeKey(row) {
+  return row.evaluate((el) => {
+    const path = [];
+    let node = el;
+    while (node && node.nodeType === 1) {
+      let index = 1;
+      for (let sibling = node.previousElementSibling; sibling; sibling = sibling.previousElementSibling) {
+        index += 1;
+      }
+      path.unshift(`${node.tagName.toLowerCase()}:${index}`);
+      node = node.parentElement;
+    }
+    return path.join("/");
+  }).catch(() => "");
+}
+
+async function dedupeVisibleAlertRows(rows, source) {
+  const unique = [];
+  const seen = new Set();
+  const diagnostics = [];
+
+  for (const row of rows) {
+    const key = await getAlertDomNodeKey(row);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    unique.push(row);
+
+    const meta = await row.evaluate((el) => ({
+      tag: el.tagName,
+      dataName: el.getAttribute("data-name"),
+      dataRole: el.getAttribute("data-role"),
+      dataQaId: el.getAttribute("data-qa-id"),
+      className: typeof el.className === "string" ? el.className.slice(0, 120) : "",
+    })).catch(() => null);
+    if (meta) diagnostics.push({ key, ...meta });
+  }
+
+  console.log(
+    `[alerts] row source=${source} raw=${rows.length} unique=${unique.length} duplicateNodes=${rows.length - unique.length}`
+  );
+  if (diagnostics.length) {
+    console.log(`[alerts] row diagnostics: ${JSON.stringify(diagnostics.slice(0, 20))}`);
+  }
+  return unique;
 }
 
 async function getVisibleAlertRows(page) {
@@ -1703,6 +1754,26 @@ async function getVisibleAlertRows(page) {
     '[class*="itemRow"][class*="alert"]',
   ];
 
+  // The ticker node is the most specific and stable anchor. Starting from a
+  // broad alert container can make a parent row read the first child's ticker,
+  // which is how wl1 and wl2 were previously reported as the same alert.
+  const tickerItems = page.locator('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]');
+  const tickerCount = Math.min(await tickerItems.count().catch(() => 0), 300);
+  const tickerRows = [];
+  for (let i = 0; i < tickerCount; i++) {
+    const ticker = tickerItems.nth(i);
+    if (!(await ticker.isVisible().catch(() => false))) continue;
+
+    const row = ticker.locator(
+      'xpath=ancestor-or-self::*[@data-name="alert-item" or @data-role="alert-item" or contains(@data-qa-id,"alert-item") or contains(@class,"alertItem") or contains(@class,"alert-row") or contains(@class,"itemRow")][1]'
+    ).first();
+    if (await row.isVisible().catch(() => false)) tickerRows.push(row);
+  }
+
+  if (tickerRows.length > 0) {
+    return dedupeVisibleAlertRows(tickerRows, `ticker-ancestor:${tickerCount}`);
+  }
+
   for (const sel of rowSelectors) {
     const rows = page.locator(sel);
     const count = Math.min(await rows.count().catch(() => 0), 300);
@@ -1713,19 +1784,10 @@ async function getVisibleAlertRows(page) {
       const row = rows.nth(i);
       if (await row.isVisible().catch(() => false)) visible.push(row);
     }
-    if (visible.length > 0) return visible;
+    if (visible.length > 0) return dedupeVisibleAlertRows(visible, sel);
   }
 
-  const tickerItems = page.locator('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]');
-  const tickerCount = Math.min(await tickerItems.count().catch(() => 0), 300);
-  const tickerRows = [];
-  for (let i = 0; i < tickerCount; i++) {
-    const row = tickerItems.nth(i).locator(
-      'xpath=ancestor::*[@data-name="alert-item" or @data-role="alert-item" or contains(@class,"alert")][1]'
-    ).first();
-    if (await row.isVisible().catch(() => false)) tickerRows.push(row);
-  }
-  return tickerRows;
+  return [];
 }
 
 async function getAlertActionRow(row) {
@@ -1744,10 +1806,11 @@ async function getAlertActionRow(row) {
 
 
 async function getAlertTickerFromRow(row) {
-  const directTicker = row.locator('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]').first();
-  if (await directTicker.isVisible().catch(() => false)) {
-    return ((await directTicker.textContent().catch(() => "")) || "").trim();
-  }
+  return row.evaluate((el) => {
+    const selector = '[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]';
+    const ticker = el.matches(selector) ? el : el.querySelector(selector);
+    return (ticker?.textContent || "").trim();
+  }).catch(() => "");
 }
 
 async function getManagedAlertTickerTexts(page, prefixes) {
@@ -1765,6 +1828,165 @@ async function assertNoManagedAlertsRemain(page, prefixes) {
   }
 }
 
+async function findVisibleAlertDeleteButtonWithin(scope) {
+  const selectors = [
+    '[data-name="alert-delete-button"]',
+    'button[aria-label="Delete alert"]',
+    'button[aria-label="Delete"]',
+    'button[aria-label="削除"]',
+    '[data-name="remove-button"]',
+    '[data-qa-id="remove-button"]',
+    '[aria-label*="Delete" i]',
+    '[aria-label*="削除"]',
+    '[class*="delete"]',
+    '[class*="remove"]',
+    '[class*="trash"]',
+  ];
+
+  for (const selector of selectors) {
+    const button = scope.locator(selector).first();
+    if (await button.isVisible().catch(() => false)) return button;
+  }
+  return null;
+}
+
+async function clickAlertDeleteButton(page, row) {
+  await row.scrollIntoViewIfNeeded().catch(() => {});
+  await row.hover({ force: true }).catch(() => {});
+  await page.waitForTimeout(250);
+
+  const button = await findVisibleAlertDeleteButtonWithin(row);
+  if (!button) return false;
+
+  if (await safeClick(button, { timeout: 4000 })) {
+    console.log("✅ アラート削除ボタンをPlaywrightでクリックしました");
+    return true;
+  }
+  if (await safeClick(button, { timeout: 4000, force: true })) {
+    console.log("✅ アラート削除ボタンをPlaywright force clickしました");
+    return true;
+  }
+  return false;
+}
+
+async function clickAlertDeleteButtonViaDom(page, row) {
+  const rowHandle = await row.elementHandle().catch(() => null);
+  if (!rowHandle) return false;
+
+  return page.evaluate((row) => {
+    const selectors = [
+      '[data-name="alert-delete-button"]',
+      'button[aria-label="Delete alert"]',
+      'button[aria-label="Delete"]',
+      'button[aria-label="削除"]',
+      '[data-name="remove-button"]',
+      '[data-qa-id="remove-button"]',
+      '[aria-label*="Delete" i]',
+      '[aria-label*="削除"]',
+      '[class*="delete"]',
+      '[class*="remove"]',
+      '[class*="trash"]',
+    ];
+    const findButton = () => selectors
+      .map((selector) => row.querySelector(selector))
+      .find((button) => button && typeof button.click === "function");
+
+    let button = findButton();
+    if (!button) {
+      row.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+      row.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+      button = findButton();
+    }
+    if (!button) return false;
+    button.click();
+    return true;
+  }, rowHandle);
+}
+
+async function clickAlertDeleteFallback(page, row) {
+  console.log("⚠️ Playwright削除操作で件数が減らないため、右クリックメニューへfallbackします");
+  await row.hover({ force: true }).catch(() => {});
+  const box = await row.boundingBox().catch(() => null);
+  if (!box) return false;
+
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: "right" });
+  await page.waitForTimeout(500);
+
+  const menuItem = page.locator([
+    '[role="menuitem"]:has-text("削除")',
+    '[role="menuitem"]:has-text("Delete")',
+    '[role="menuitem"]:has-text("Remove")',
+    '[data-role="menuitem"]:has-text("削除")',
+    '[data-role="menuitem"]:has-text("Delete")',
+    '[data-role="menuitem"]:has-text("Remove")',
+  ].join(", ")).first();
+
+  if (await menuItem.isVisible().catch(() => false)) {
+    if (await safeClick(menuItem, { timeout: 4000, force: true })) {
+      console.log("✅ 右クリックメニューから削除しました (Playwright)");
+      await page.waitForTimeout(400);
+      await confirmTradingViewDialog(page).catch(() => {});
+      return true;
+    }
+  }
+
+  const domMenuDeleted = await page.evaluate(() => {
+    const items = Array.from(document.querySelectorAll(
+      '[role="menuitem"], [data-role="menuitem"], div[class*="menu"] div[class*="item"]'
+    ));
+    const deleteItem = items.find((item) =>
+      /削除|Delete|Remove|Stop|停止/i.test(item.textContent || "") ||
+      (item.getAttribute("data-name") || "").includes("remove")
+    );
+    if (!deleteItem || typeof deleteItem.click !== "function") return false;
+    deleteItem.click();
+    return true;
+  }).catch(() => false);
+
+  if (domMenuDeleted) {
+    console.log("✅ 右クリックメニューから削除しました (DOM fallback)");
+    await page.waitForTimeout(400);
+    await confirmTradingViewDialog(page).catch(() => {});
+    return true;
+  }
+
+  console.log("❌ 右クリックメニューにも削除項目なし。Deleteキーを試行します");
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2).catch(() => {});
+  await page.keyboard.press("Delete").catch(() => {});
+  await page.waitForTimeout(400);
+  await confirmTradingViewDialog(page).catch(() => {});
+  return true;
+}
+
+async function waitForAlertDeletionProgress(page, prefixes, targetText, beforeCount, row, rowHandle, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastAfterCount = beforeCount;
+
+  while (Date.now() <= deadline) {
+    const afterAlerts = await getManagedAlertTickerTexts(page, prefixes);
+    lastAfterCount = countAlertText(afterAlerts, targetText);
+    const rowAttached = rowHandle
+      ? await rowHandle.evaluate((el) => el.isConnected).catch(() => false)
+      : await row.evaluate((el) => el.isConnected).catch(() => false);
+    console.log(
+      `[alert-delete] target: ${targetText} beforeCount: ${beforeCount} afterCount: ${lastAfterCount} rowAttached: ${rowAttached}`
+    );
+
+    if (hasAlertDeletionProgress(beforeCount, lastAfterCount)) {
+      return { success: true, afterCount: lastAfterCount, rowAttached };
+    }
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await page.waitForTimeout(Math.min(ALERT_DELETE_POLL_MS, remainingMs));
+  }
+
+  const rowAttached = rowHandle
+    ? await rowHandle.evaluate((el) => el.isConnected).catch(() => false)
+    : await row.evaluate((el) => el.isConnected).catch(() => false);
+  return { success: false, afterCount: lastAfterCount, rowAttached };
+}
+
 async function deleteManagedAlerts(page, prefixes) {
   await ensureAlertsPanelOpen(page);
 
@@ -1774,181 +1996,73 @@ async function deleteManagedAlerts(page, prefixes) {
       console.log("No more managed alerts.");
       return;
     }
-    const targetText = currentAlerts[0];
-    console.log(`Deleting alert: ${targetText}`);
 
-    // 対象行を再取得
+    const targetText = currentAlerts[0];
+    const beforeCount = countAlertText(currentAlerts, targetText);
+    console.log(`[alert-delete] target: ${targetText} beforeCount: ${beforeCount}`);
+
     const rows = await getVisibleAlertRows(page);
     let targetRow = null;
     for (const row of rows) {
-      const txt = await getAlertTickerFromRow(row);
-      if (txt === targetText) {
+      if ((await getAlertTickerFromRow(row)) === targetText) {
         targetRow = row;
         break;
       }
     }
     if (!targetRow) {
-      console.warn(`Target alert row not found visually: ${targetText}, retrying...`);
-      await page.waitForTimeout(1000);
+      console.warn(`[alert-delete] target row not found: ${targetText}; retrying`);
+      await page.waitForTimeout(ALERT_DELETE_POLL_MS);
       continue;
     }
+    const targetRowHandle = await targetRow.elementHandle().catch(() => null);
 
-    // 行の要素ハンドルを取得
-    const rowHandle = await targetRow.elementHandle();
-    if (!rowHandle) continue;
-
-    // 1. 強制的に削除ボタンを探してクリック（DOM 直接操作）
-    const deleted = await page.evaluate((row) => {
-      // 行内の削除ボタンを探す（非表示でも DOM に存在する場合がある）
-      const selectors = [
-        '[data-name="alert-delete-button"]',
-        'button[aria-label="Delete alert"]',
-        'button[aria-label="Delete"]',
-        'button[aria-label="削除"]',
-        'button[data-name="remove-button"]',
-        'button[data-qa-id="remove-button"]',
-        'button[class*="delete"]',
-        'button[class*="remove"]',
-        'button[class*="trash"]',
-      ];
-      for (const sel of selectors) {
-        const btn = row.querySelector(sel);
-        if (btn && typeof btn.click === 'function') {
-          btn.click();
-          return true;
-        }
-      }
-      // ホバーを強制的に発火させてボタンを出現させる
-      row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-      row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-      // 少し待ってから再度探索
-      return new Promise(resolve => {
-        setTimeout(() => {
-          for (const sel of selectors) {
-            const btn = row.querySelector(sel);
-            if (btn && typeof btn.click === 'function') {
-              btn.click();
-              resolve(true);
-              return;
-            }
-          }
-          resolve(false);
-        }, 500);
-      });
-    }, rowHandle);
-
-    if (deleted) {
-      console.log("✅ 削除ボタンを直接クリックしました");
-      await page.waitForTimeout(1500);
-      await confirmTradingViewDialog(page).catch(() => {});
-    } else {
-      console.log("⚠️ 削除ボタンが見つからないため、右クリックメニューを強制表示します");
-
-      // 行のホバーを強制して、中のDOM要素（ボタン等）をデバッグ出力する
-      await targetRow.hover({ force: true });
+    let clicked = await clickAlertDeleteButton(page, targetRow);
+    if (!clicked) {
+      clicked = await clickAlertDeleteButtonViaDom(page, targetRow);
+      if (clicked) console.log("✅ アラート削除ボタンをDOM click fallbackでクリックしました");
+    }
+    if (clicked) {
       await page.waitForTimeout(500);
-      const rowDump = await page.evaluate((row) => {
-        const btns = Array.from(row.querySelectorAll('button, [role="button"], svg, div[class*="icon"], div[class*="button"]'));
-        return btns.map(b => {
-          const cls = typeof b.className === 'string' ? b.className : String(b.getAttribute('class') || '');
-          return {
-            tag: b.tagName,
-            className: cls,
-            ariaLabel: b.getAttribute('aria-label'),
-            dataName: b.getAttribute('data-name'),
-            text: b.textContent.trim()
-          };
-        }).filter(x => x.ariaLabel || x.dataName || x.text || x.className.includes('icon') || x.className.includes('remove') || x.className.includes('close') || x.className.includes('button'));
-      }, rowHandle);
-      console.log("🛠️ [デバッグ] 行内のアイコン類:", JSON.stringify(rowDump, null, 2));
-
-      // 2. 右クリックメニューを強制表示（座標指定）
-      const box = await targetRow.boundingBox();
-      if (box) {
-        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: 'right' });
-        await page.waitForTimeout(800);
-
-        // 新しいLocatorでの削除項目探し
-        const delMenuItem = page.locator([
-          '[role="menuitem"]:has-text("削除")',
-          '[role="menuitem"]:has-text("Delete")',
-          '[role="menuitem"]:has-text("Remove")',
-          '[data-role="menuitem"]:has-text("削除")',
-          '[data-role="menuitem"]:has-text("Delete")',
-          '[data-role="menuitem"]:has-text("Remove")',
-          'div[class*="item"]:has-text("削除")',
-          'div[class*="item"]:has-text("Delete")',
-          'div[class*="item"]:has-text("Remove")'
-        ].join(', ')).first();
-
-        let menuDeleted = false;
-
-        if (await delMenuItem.isVisible().catch(() => false)) {
-          await delMenuItem.click({ force: true });
-          menuDeleted = true;
-          console.log("✅ 右クリックメニューから削除しました (Playwright)");
-        } else {
-          // Playwrightでダメなら現状のメニュー画面をデバッグ出力
-          const menuDump = await page.evaluate(() => {
-            const allItems = Array.from(document.querySelectorAll('[role="menuitem"], [data-role="menuitem"], div[class*="menu"] div[class*="item"]'));
-            return allItems.map(m => ({
-              text: m.textContent.trim(),
-              className: m.className,
-              dataName: m.getAttribute("data-name"),
-              html: m.innerHTML
-            }));
-          });
-          console.log("🛠️ [デバッグ] メニュー項目ダンプ:", JSON.stringify(menuDump, null, 2));
-
-          menuDeleted = await page.evaluate(() => {
-            const menu = document.querySelector('[data-role="menu"], [role="menu"]');
-            const items = menu 
-              ? Array.from(menu.querySelectorAll('[data-role="menuitem"], [role="menuitem"]'))
-              : Array.from(document.querySelectorAll('[role="menuitem"], [data-role="menuitem"], div[class*="menu"] div[class*="item"]'));
-            
-            const deleteItem = items.find(el => /削除|Delete|Remove|Stop|停止|x/i.test(el.textContent || '') || (el.getAttribute('data-name')||'').includes('remove'));
-            if (deleteItem && typeof deleteItem.click === 'function') {
-              deleteItem.click();
-              return true;
-            }
-            return false;
-          });
-
-          if (menuDeleted) {
-            console.log("✅ 右クリックメニューから削除しました (DOM Evaluate)");
-          }
-        }
-
-        if (menuDeleted) {
-          await page.waitForTimeout(1500);
-          await confirmTradingViewDialog(page).catch(() => {});
-        } else {
-          console.log("❌ 右クリックメニューにも削除項目なし。Deleteキーを試行します。");
-          await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2); // 左クリックで選択
-          await page.waitForTimeout(300);
-          await page.keyboard.press('Delete').catch(() => {});
-          await page.waitForTimeout(1500);
-          await confirmTradingViewDialog(page).catch(() => {});
-        }
-      }
+      await confirmTradingViewDialog(page).catch(() => {});
     }
 
-    // 削除確認（最大15秒）
-    let success = false;
-    for (let i = 0; i < 15; i++) {
-      const remaining = await getManagedAlertTickerTexts(page, prefixes);
-      if (!remaining.includes(targetText)) {
-        success = true;
-        console.log(`🎉 削除成功: ${targetText}`);
-        break;
+    let result = await waitForAlertDeletionProgress(
+      page,
+      prefixes,
+      targetText,
+      beforeCount,
+      targetRow,
+      targetRowHandle,
+      clicked ? ALERT_DELETE_PRIMARY_VERIFY_MS : 0
+    );
+
+    if (!result.success) {
+      const remainingVerifyMs = ALERT_DELETE_TOTAL_VERIFY_MS - Math.min(
+        ALERT_DELETE_PRIMARY_VERIFY_MS,
+        ALERT_DELETE_TOTAL_VERIFY_MS
+      );
+      if (result.rowAttached) {
+        await clickAlertDeleteFallback(page, targetRow);
+      } else {
+        console.log("[alert-delete] target row detached; waiting for the alert list to publish the count change");
       }
-      await page.waitForTimeout(1000);
+      result = await waitForAlertDeletionProgress(
+        page,
+        prefixes,
+        targetText,
+        beforeCount,
+        targetRow,
+        targetRowHandle,
+        remainingVerifyMs
+      );
     }
 
-    if (!success) {
+    if (!result.success) {
       await safeScreenshot(page, `alert_delete_failed_${Date.now()}`);
-      throw new Error(`アラート削除に失敗しました: ${targetText}`);
+      throw new Error(`アラート削除に失敗しました: ${targetText} (beforeCount=${beforeCount}, afterCount=${result.afterCount})`);
     }
+
+    console.log(`[alert-delete] target: ${targetText} beforeCount: ${beforeCount} afterCount: ${result.afterCount} result: success`);
   }
 
   throw new Error("アラート削除ループが上限に達しました");

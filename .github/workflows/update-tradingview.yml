@@ -24,10 +24,8 @@ jobs:
           node-version: "20"
 
       - name: Install deps
-        shell: pwsh
         run: |
-          npm ci
-          if ($LASTEXITCODE -ne 0) { npm i }
+          npm ci --no-audit --no-fund
 
       - name: Run updater
         env:

@@ -3,8 +3,9 @@
 ## Commands
 
 - Run the updater with `npm run update` after required environment variables are set.
+- Run `npm ci --no-audit --no-fund` in CI; `package-lock.json` is committed and the workflow must not hide a missing-lockfile error behind an `npm install` fallback.
 - Capture a new TradingView browser session interactively with `node save-storage-state.js`.
-- Run `npm test` for alert-webhook regression checks and `node --check update-watchlist.js` for syntax checks when touching the updater.
+- Run `npm test` for alert and webhook regression checks and `node --check update-watchlist.js` for syntax checks when touching the updater.
 
 ## Project Shape
 
@@ -38,6 +39,7 @@
 - When `#overlap-manager-root` intercepts clicks, clear blocking overlays/dialogs before retrying the target button; prefer short click timeouts plus fallback strategies over adding long sleeps.
 - If TradingView shows a "Session disconnected" dialog because the account was accessed from another browser or device, click `Connect` to reclaim the updater session, but cap reconnect retries to avoid an endless loop if another device keeps taking over.
 - After deleting alerts, allow time for alert slots to be released before creating new alerts.
+- Alert discovery should anchor on visible ticker elements and the nearest alert row, deduplicate identical DOM nodes, and log row diagnostics when selectors match. Alert deletion succeeds only when the target ticker count decreases; same-name alerts are deleted one at a time and each `beforeCount`/`afterCount` is logged.
 - Handle the "One alert to track an entire watchlist" promo dialog before continuing interactions.
 - TradingView Premium watchlists are capped at 500 symbols per list; the builder must generate files within that limit. The updater must fail with a clear error instead of trimming symbols silently.
 - Before submitting a watchlist alert, verify that the alert condition dialog shows the configured `ALERT_CONDITION_NAME`; do not submit the default Price/Moving Up condition as a fallback.
