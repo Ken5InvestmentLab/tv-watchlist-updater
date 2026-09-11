@@ -41,6 +41,9 @@ const ALERT_DELETE_PRIMARY_VERIFY_MS = Number(process.env.ALERT_DELETE_PRIMARY_V
 const ALERT_DELETE_TOTAL_VERIFY_MS = Number(process.env.ALERT_DELETE_TOTAL_VERIFY_MS || 15000);
 const ALERT_DELETE_POLL_MS = Number(process.env.ALERT_DELETE_POLL_MS || 750);
 const UPDATER_TAB_MARKER = "tv-watchlist-updater-owned";
+const UPDATER_RECOVERY_TAB_MARKER = "tv-watchlist-updater-recovery-owned";
+const UPDATER_TAB_SCAN_TIMEOUT_MS = Number(process.env.UPDATER_TAB_SCAN_TIMEOUT_MS || 1500);
+const UPDATER_TAB_CREATE_TIMEOUT_MS = Number(process.env.UPDATER_TAB_CREATE_TIMEOUT_MS || 15000);
 const UPDATER_TAB_CLOSE_TIMEOUT_MS = Number(process.env.UPDATER_TAB_CLOSE_TIMEOUT_MS || 5000);
 
 const WORKDIR = path.resolve(process.cwd(), "tmp");
@@ -71,23 +74,86 @@ function validateLocalCdpUrl(value) {
   return url.toString().replace(/\/$/, "");
 }
 
-async function getOrCreateUpdaterPage(context) {
+async function evaluateWithTimeout(page, callback, arg, timeoutMs) {
+  let timer;
+  const operation = Promise.resolve()
+    .then(() => page.evaluate(callback, arg))
+    .catch(() => false);
+
+  return new Promise((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
+    operation.then((value) => {
+      clearTimeout(timer);
+      resolve(value);
+    });
+  });
+}
+
+async function createPageWithTimeout(context, label) {
+  let timer;
+  const operation = Promise.resolve().then(() => context.newPage());
+
+  return new Promise((resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`[cdp] ${label} tab creation timed out after ${UPDATER_TAB_CREATE_TIMEOUT_MS}ms`));
+    }, UPDATER_TAB_CREATE_TIMEOUT_MS);
+    operation.then(
+      (page) => {
+        clearTimeout(timer);
+        resolve(page);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+async function getOrCreateUpdaterPage(
+  context,
+  marker = UPDATER_TAB_MARKER,
+  label = "updater"
+) {
   const pages = context.pages();
-  for (const candidate of [...pages].reverse()) {
-    const owned = await candidate
-      .evaluate((marker) => window.name === marker, UPDATER_TAB_MARKER)
-      .catch(() => false);
+  console.log(`[cdp] scanning ${pages.length} existing tabs for ${label}-owned marker`);
+
+  for (let index = pages.length - 1; index >= 0; index--) {
+    const candidate = pages[index];
+    const owned = await evaluateWithTimeout(
+      candidate,
+      (candidateMarker) => window.name === candidateMarker,
+      marker,
+      UPDATER_TAB_SCAN_TIMEOUT_MS
+    );
+
+    if (owned === null) {
+      let url = "";
+      try {
+        url = candidate.url();
+      } catch { /* ignore an already-disconnected tab */ }
+      console.warn(
+        `[cdp] skipped an unresponsive tab while scanning ${label} tabs: index=${index} url=${JSON.stringify(url)}`
+      );
+    }
+
     if (!owned) continue;
 
-    console.log("[cdp] reusing the existing updater-owned tab");
+    console.log(`[cdp] reusing the existing ${label}-owned tab`);
     return candidate;
   }
 
-  const page = await context.newPage();
-  await page.evaluate((marker) => {
-    window.name = marker;
-  }, UPDATER_TAB_MARKER).catch(() => { });
-  console.log("[cdp] created one updater-owned tab");
+  const page = await createPageWithTimeout(context, label);
+  await evaluateWithTimeout(
+    page,
+    (pageMarker) => {
+      window.name = pageMarker;
+      return true;
+    },
+    marker,
+    UPDATER_TAB_SCAN_TIMEOUT_MS
+  );
+  console.log(`[cdp] created one ${label}-owned tab`);
   return page;
 }
 
@@ -2649,7 +2715,11 @@ async function closeWatchlistPromoDialog(page) {
 async function recoverManagedAlertSlot(page) {
   const prefixes = [WATCHLIST_1_PREFIX, WATCHLIST_2_PREFIX];
   const excludeTexts = [WATCHLIST_1_FINAL_NAME, WATCHLIST_2_FINAL_NAME];
-  const recoveryPage = await page.context().newPage();
+  const recoveryPage = await getOrCreateUpdaterPage(
+    page.context(),
+    UPDATER_RECOVERY_TAB_MARKER,
+    "alert-recovery"
+  );
   recoveryPage.setDefaultTimeout(STEP_TIMEOUT);
   recoveryPage.setDefaultNavigationTimeout(NAV_TIMEOUT);
 
@@ -2671,7 +2741,7 @@ async function recoverManagedAlertSlot(page) {
     }
     await logAlertsDebugState(recoveryPage, "promo-recovery-after");
   } finally {
-    await recoveryPage.close().catch(() => { });
+    await releaseUpdaterPage(recoveryPage, null, true);
   }
 
   if (deletedCount > 0) {
