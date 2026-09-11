@@ -1765,7 +1765,7 @@ async function getVisibleAlertRows(page) {
     if (!(await ticker.isVisible().catch(() => false))) continue;
 
     const row = ticker.locator(
-      'xpath=ancestor-or-self::*[@data-name="alert-item" or @data-role="alert-item" or contains(@data-qa-id,"alert-item") or contains(@class,"alertItem") or contains(@class,"alert-row") or contains(@class,"itemRow")][1]'
+      'xpath=ancestor-or-self::*[(@data-name="alerts-log-item" or @data-name="alert-item" or @data-role="alert-item" or contains(@data-qa-id,"alert-item") or contains(@class,"alertItem") or contains(@class,"alert-row") or contains(@class,"itemRow")) and not(@data-name="alert-item-ticker" or contains(@data-qa-id,"alert-item-ticker"))][1]'
     ).first();
     if (await row.isVisible().catch(() => false)) tickerRows.push(row);
   }
@@ -1792,7 +1792,7 @@ async function getVisibleAlertRows(page) {
 
 async function getAlertActionRow(row) {
   const candidates = [
-    row.locator('xpath=ancestor-or-self::*[@data-name="alerts-log-item" or @data-name="alert-item" or @data-role="alert-item"][1]').first(),
+    row.locator('xpath=ancestor-or-self::*[(@data-name="alerts-log-item" or @data-name="alert-item" or @data-role="alert-item" or contains(@data-qa-id,"alert-item")) and not(@data-name="alert-item-ticker" or contains(@data-qa-id,"alert-item-ticker"))][1]').first(),
     row.locator('xpath=ancestor-or-self::*[contains(@class,"itemRow") or contains(@class,"alert-row")][1]').first(),
     row,
   ];
@@ -2014,11 +2014,12 @@ async function deleteManagedAlerts(page, prefixes) {
       await page.waitForTimeout(ALERT_DELETE_POLL_MS);
       continue;
     }
-    const targetRowHandle = await targetRow.elementHandle().catch(() => null);
+    const actionRow = await getAlertActionRow(targetRow);
+    const targetRowHandle = await actionRow.elementHandle().catch(() => null);
 
-    let clicked = await clickAlertDeleteButton(page, targetRow);
+    let clicked = await clickAlertDeleteButton(page, actionRow);
     if (!clicked) {
-      clicked = await clickAlertDeleteButtonViaDom(page, targetRow);
+      clicked = await clickAlertDeleteButtonViaDom(page, actionRow);
       if (clicked) console.log("✅ アラート削除ボタンをDOM click fallbackでクリックしました");
     }
     if (clicked) {
@@ -2031,7 +2032,7 @@ async function deleteManagedAlerts(page, prefixes) {
       prefixes,
       targetText,
       beforeCount,
-      targetRow,
+      actionRow,
       targetRowHandle,
       clicked ? ALERT_DELETE_PRIMARY_VERIFY_MS : 0
     );
@@ -2042,7 +2043,7 @@ async function deleteManagedAlerts(page, prefixes) {
         ALERT_DELETE_TOTAL_VERIFY_MS
       );
       if (result.rowAttached) {
-        await clickAlertDeleteFallback(page, targetRow);
+        await clickAlertDeleteFallback(page, actionRow);
       } else {
         console.log("[alert-delete] target row detached; waiting for the alert list to publish the count change");
       }
@@ -2051,7 +2052,7 @@ async function deleteManagedAlerts(page, prefixes) {
         prefixes,
         targetText,
         beforeCount,
-        targetRow,
+        actionRow,
         targetRowHandle,
         remainingVerifyMs
       );
