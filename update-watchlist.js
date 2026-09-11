@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright");
 const { validateAlertWebhookUrl, configureAlertWebhook } = require("./alert-webhook");
-const { countAlertText, hasAlertDeletionProgress } = require("./alert-delete-logic");
+const { countAlertText, hasAlertDeletionProgress, isExcludedAlertText } = require("./alert-delete-logic");
 
 // ==============================
 // ENV
@@ -35,8 +35,6 @@ const NAV_TIMEOUT = 90000;
 const STEP_TIMEOUT = 45000;
 
 const ALERT_SLOT_RELEASE_WAIT_MS = Number(process.env.ALERT_SLOT_RELEASE_WAIT_MS || 30000);
-const WATCHLIST_PROMO_RETRY_MAX = Number(process.env.WATCHLIST_PROMO_RETRY_MAX || 6);
-const WATCHLIST_PROMO_RETRY_WAIT_MS = Number(process.env.WATCHLIST_PROMO_RETRY_WAIT_MS || 30000);
 const TRADINGVIEW_WATCHLIST_SYMBOL_LIMIT = Number(process.env.TRADINGVIEW_WATCHLIST_SYMBOL_LIMIT || 500);
 const TRADINGVIEW_SESSION_RECONNECT_MAX = Number(process.env.TRADINGVIEW_SESSION_RECONNECT_MAX || 3);
 const ALERT_DELETE_PRIMARY_VERIFY_MS = Number(process.env.ALERT_DELETE_PRIMARY_VERIFY_MS || 4000);
@@ -49,6 +47,7 @@ const OUT2 = path.join(WORKDIR, "wl2.txt");
 
 let tradingViewLoginRefreshAttempted = false;
 let tradingViewSessionReconnectCount = 0;
+let alertsDebugDumped = false;
 
 function validateLocalCdpUrl(value) {
   if (!value) return "";
@@ -1525,6 +1524,91 @@ async function isAlertsTabSelected(page) {
   return await selectedAlertsTab.isVisible().catch(() => false);
 }
 
+async function logAlertsDebugState(page, label = "scan") {
+  const state = await page.evaluate(() => {
+    const isVisible = (el) => {
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+    };
+    const clean = (value, max = 180) => (value || "").replace(/\s+/g, " ").trim().slice(0, max);
+    const uniqueVisible = (selector) => new Set(
+      Array.from(document.querySelectorAll(selector)).filter(isVisible)
+    );
+    const rowSelectors = [
+      '[data-name="alert-item"]',
+      '[data-role="alert-item"]',
+      '[data-qa-id*="alert-item"]',
+      '[class*="itemBody"]',
+    ];
+    const rowNodes = new Set();
+    for (const selector of rowSelectors) {
+      for (const node of document.querySelectorAll(selector)) {
+        if (isVisible(node)) rowNodes.add(node);
+      }
+    }
+
+    const panel = document.querySelector(".widgetbar-widget-alerts") ||
+      document.querySelector('[data-qa-id="alerts-widget-header-tabs"]')?.closest(".widgetbar-widget");
+    const selectedTab = Array.from(document.querySelectorAll('[role="tab"][aria-selected="true"]'))
+      .find((tab) => isVisible(tab) && /^(Alerts|アラート)$/i.test(clean(tab.textContent, 80)));
+    const dialogs = Array.from(document.querySelectorAll('[role="dialog"], [data-role="dialog"]'))
+      .filter(isVisible)
+      .map((dialog) => clean(dialog.textContent, 260));
+    const candidateSelectors = [
+      '[data-name*="alert"]',
+      '[data-qa-id*="alert"]',
+      '[role="tab"]',
+      '[role="tabpanel"]',
+      '[role="row"]',
+      '[role="listitem"]',
+    ];
+    const candidates = [];
+    const seen = new Set();
+    for (const selector of candidateSelectors) {
+      for (const element of document.querySelectorAll(selector)) {
+        if (seen.has(element)) continue;
+        seen.add(element);
+        candidates.push({
+          selector,
+          tag: element.tagName,
+          dataName: element.getAttribute("data-name"),
+          dataQaId: element.getAttribute("data-qa-id"),
+          role: element.getAttribute("role"),
+          ariaLabel: element.getAttribute("aria-label"),
+          visible: isVisible(element),
+          text: clean(element.textContent),
+        });
+        if (candidates.length >= 100) break;
+      }
+      if (candidates.length >= 100) break;
+    }
+
+    return {
+      panelOpen: Boolean(panel && isVisible(panel)),
+      activeTab: selectedTab ? clean(selectedTab.textContent, 80) : "",
+      alertItemCount: rowNodes.size,
+      alertTickerCount: uniqueVisible('[data-name="alert-item-ticker"], [data-qa-id*="alert-item-ticker"]').size,
+      bodyPreview: clean(document.body?.innerText, 500),
+      panelPreview: panel ? clean(panel.innerText, 700) : "",
+      dialogPreview: dialogs.slice(-3),
+      candidates,
+    };
+  }).catch((error) => ({ error: error?.message || String(error) }));
+
+  if (state.error) {
+    console.warn(`[alerts-debug] label=${label} failed: ${state.error}`);
+    return state;
+  }
+
+  console.log(
+    `[alerts-debug] panelOpen=${state.panelOpen} activeTab=${JSON.stringify(state.activeTab)} alertItemCount=${state.alertItemCount} alertTickerCount=${state.alertTickerCount}`
+  );
+  console.log(`[alerts-debug] textPreview=${JSON.stringify({ body: state.bodyPreview, panel: state.panelPreview, dialogs: state.dialogPreview })}`);
+  console.log(`[alerts-debug] candidates=${JSON.stringify(state.candidates)}`);
+  return state;
+}
+
 async function isAlertsEmptyStateVisible(page) {
   const emptyText = page
     .getByText(
@@ -1546,7 +1630,10 @@ async function isAlertsContentReady(page) {
     page.locator('[data-name="alerts-list"]').first(),
     page.locator('[data-qa-id="alerts-list"]').first(),
     page.locator('[data-name="alerts-list-wrapper"], [data-qa-id="alerts-list-wrapper"]').first(),
+    page.locator('[data-qa-id="alerts-widget-header-tabs"]').first(),
+    page.locator('div[class*="widgetbar-widget-alerts"]').first(),
     page.locator('[data-name="alert-item"], [data-role="alert-item"], [data-qa-id*="alert-item"]').first(),
+    page.locator('[class*="itemBody"]').first(),
     page
       .getByText(
         /No alerts|No alerts created|アラートがありません|アラートはありません|アラートなし/i
@@ -1668,11 +1755,13 @@ async function ensureAlertsPanelOpen(page) {
       }
     }
 
-    if (await isAlertsContentReady(page)) {
+    if (await isAlertsTabSelected(page) && await isAlertsContentReady(page)) {
       return;
     }
 
-    console.log(`alerts panel not ready yet. retry=${attempt + 1}`);
+    console.log(
+      `alerts panel not ready yet. panelOpen=${await isAlertsSidebarOpen(page)} alertsTabSelected=${await isAlertsTabSelected(page)} retry=${attempt + 1}`
+    );
     await closeAnyMenu(page);
     await page.waitForTimeout(800);
   }
@@ -1683,6 +1772,11 @@ async function ensureAlertsPanelOpen(page) {
 
 async function getAllAlertTickerTexts(page) {
   await ensureAlertsPanelOpen(page);
+
+  if (!alertsDebugDumped) {
+    await logAlertsDebugState(page, "initial");
+    alertsDebugDumped = true;
+  }
 
   const rows = await getVisibleAlertRows(page);
   const arr = [];
@@ -1748,6 +1842,7 @@ async function getVisibleAlertRows(page) {
     '[data-role="alert-item"]',
     '[data-qa-id*="alert-item"]',
     '[data-name*="alert-row"]',
+    '[class*="itemBody"]',
     '[class*="alertItem"]',
     '[class*="alert-row"]',
     '[class*="itemRow"]',
@@ -1765,7 +1860,7 @@ async function getVisibleAlertRows(page) {
     if (!(await ticker.isVisible().catch(() => false))) continue;
 
     const row = ticker.locator(
-      'xpath=ancestor-or-self::*[(@data-name="alerts-log-item" or @data-name="alert-item" or @data-role="alert-item" or contains(@data-qa-id,"alert-item") or contains(@class,"alertItem") or contains(@class,"alert-row") or contains(@class,"itemRow")) and not(@data-name="alert-item-ticker" or contains(@data-qa-id,"alert-item-ticker"))][1]'
+      'xpath=ancestor-or-self::*[(@data-name="alerts-log-item" or @data-name="alert-item" or @data-role="alert-item" or contains(@data-qa-id,"alert-item") or contains(@class,"itemBody") or contains(@class,"alertItem") or contains(@class,"alert-row") or contains(@class,"itemRow")) and not(@data-name="alert-item-ticker" or contains(@data-qa-id,"alert-item-ticker"))][1]'
     ).first();
     if (await row.isVisible().catch(() => false)) tickerRows.push(row);
   }
@@ -1792,8 +1887,8 @@ async function getVisibleAlertRows(page) {
 
 async function getAlertActionRow(row) {
   const candidates = [
-    row.locator('xpath=ancestor-or-self::*[(@data-name="alerts-log-item" or @data-name="alert-item" or @data-role="alert-item" or contains(@data-qa-id,"alert-item")) and not(@data-name="alert-item-ticker" or contains(@data-qa-id,"alert-item-ticker"))][1]').first(),
-    row.locator('xpath=ancestor-or-self::*[contains(@class,"itemRow") or contains(@class,"alert-row")][1]').first(),
+    row.locator('xpath=ancestor-or-self::*[(@data-name="alerts-log-item" or @data-name="alert-item" or @data-role="alert-item" or contains(@data-qa-id,"alert-item") or contains(@class,"itemBody")) and not(@data-name="alert-item-ticker" or contains(@data-qa-id,"alert-item-ticker"))][1]').first(),
+    row.locator('xpath=ancestor-or-self::*[contains(@class,"itemRow") or contains(@class,"alert-row") or contains(@class,"itemBody")][1]').first(),
     row,
   ];
 
@@ -1813,15 +1908,17 @@ async function getAlertTickerFromRow(row) {
   }).catch(() => "");
 }
 
-async function getManagedAlertTickerTexts(page, prefixes) {
+async function getManagedAlertTickerTexts(page, prefixes, options = {}) {
   const all = await getAllAlertTickerTexts(page);
+  const excludedTexts = options.excludeTexts || [];
   return all.filter((txt) =>
+    !isExcludedAlertText(txt, excludedTexts) &&
     prefixes.some((p) => txt.startsWith(`${p}_`) || txt.startsWith(`${p},`) || txt === p)
   );
 }
 
-async function assertNoManagedAlertsRemain(page, prefixes) {
-  const remain = await getManagedAlertTickerTexts(page, prefixes);
+async function assertNoManagedAlertsRemain(page, prefixes, options = {}) {
+  const remain = await getManagedAlertTickerTexts(page, prefixes, options);
   if (remain.length > 0) {
     await safeScreenshot(page, "managed_alerts_remain");
     throw new Error(`既存アラート削除後も管理対象アラートが残っています: ${remain.join(", ")}`);
@@ -1958,12 +2055,12 @@ async function clickAlertDeleteFallback(page, row) {
   return true;
 }
 
-async function waitForAlertDeletionProgress(page, prefixes, targetText, beforeCount, row, rowHandle, timeoutMs) {
+async function waitForAlertDeletionProgress(page, prefixes, targetText, beforeCount, row, rowHandle, timeoutMs, options = {}) {
   const deadline = Date.now() + timeoutMs;
   let lastAfterCount = beforeCount;
 
   while (Date.now() <= deadline) {
-    const afterAlerts = await getManagedAlertTickerTexts(page, prefixes);
+    const afterAlerts = await getManagedAlertTickerTexts(page, prefixes, options);
     lastAfterCount = countAlertText(afterAlerts, targetText);
     const rowAttached = rowHandle
       ? await rowHandle.evaluate((el) => el.isConnected).catch(() => false)
@@ -1987,14 +2084,16 @@ async function waitForAlertDeletionProgress(page, prefixes, targetText, beforeCo
   return { success: false, afterCount: lastAfterCount, rowAttached };
 }
 
-async function deleteManagedAlerts(page, prefixes) {
+async function deleteManagedAlerts(page, prefixes, options = {}) {
   await ensureAlertsPanelOpen(page);
+  const excludeTexts = options.excludeTexts || [];
+  let deletedCount = 0;
 
   for (let round = 0; round < 200; round++) {
-    const currentAlerts = await getManagedAlertTickerTexts(page, prefixes);
+    const currentAlerts = await getManagedAlertTickerTexts(page, prefixes, { excludeTexts });
     if (currentAlerts.length === 0) {
       console.log("No more managed alerts.");
-      return;
+      return deletedCount;
     }
 
     const targetText = currentAlerts[0];
@@ -2034,7 +2133,8 @@ async function deleteManagedAlerts(page, prefixes) {
       beforeCount,
       actionRow,
       targetRowHandle,
-      clicked ? ALERT_DELETE_PRIMARY_VERIFY_MS : 0
+      clicked ? ALERT_DELETE_PRIMARY_VERIFY_MS : 0,
+      { excludeTexts }
     );
 
     if (!result.success) {
@@ -2054,7 +2154,8 @@ async function deleteManagedAlerts(page, prefixes) {
         beforeCount,
         actionRow,
         targetRowHandle,
-        remainingVerifyMs
+        remainingVerifyMs,
+        { excludeTexts }
       );
     }
 
@@ -2064,6 +2165,7 @@ async function deleteManagedAlerts(page, prefixes) {
     }
 
     console.log(`[alert-delete] target: ${targetText} beforeCount: ${beforeCount} afterCount: ${result.afterCount} result: success`);
+    deletedCount += 1;
   }
 
   throw new Error("アラート削除ループが上限に達しました");
@@ -2406,6 +2508,44 @@ async function closeWatchlistPromoDialog(page) {
   }
 
   return false;
+}
+
+async function recoverManagedAlertSlot(page) {
+  const prefixes = [WATCHLIST_1_PREFIX, WATCHLIST_2_PREFIX];
+  const excludeTexts = [WATCHLIST_1_FINAL_NAME, WATCHLIST_2_FINAL_NAME];
+  const recoveryPage = await page.context().newPage();
+  recoveryPage.setDefaultTimeout(STEP_TIMEOUT);
+  recoveryPage.setDefaultNavigationTimeout(NAV_TIMEOUT);
+
+  let deletedCount = 0;
+  try {
+    console.log("[promo-recovery] opening an updater-owned page to rescan active alerts");
+    await recoveryPage.goto(page.url(), { waitUntil: "domcontentloaded" });
+    await recoveryPage.waitForLoadState("networkidle").catch(() => { });
+    await waitForTradingViewReady(recoveryPage);
+    await logAlertsDebugState(recoveryPage, "promo-recovery-before");
+
+    deletedCount = await deleteManagedAlerts(recoveryPage, prefixes, { excludeTexts });
+    await assertNoManagedAlertsRemain(recoveryPage, prefixes, { excludeTexts });
+
+    const remaining = await getManagedAlertTickerTexts(recoveryPage, prefixes, { excludeTexts });
+    console.log(`[promo-recovery] managed alerts = ${remaining.length}`);
+    if (remaining.length > 0) {
+      throw new Error(`上限回復後も管理対象アラートが残っています: ${remaining.join(", ")}`);
+    }
+    await logAlertsDebugState(recoveryPage, "promo-recovery-after");
+  } finally {
+    await recoveryPage.close().catch(() => { });
+  }
+
+  if (deletedCount > 0) {
+    console.log(`[promo-recovery] deleted=${deletedCount}; waiting ${ALERT_SLOT_RELEASE_WAIT_MS}ms for TradingView slot release`);
+    await page.waitForTimeout(ALERT_SLOT_RELEASE_WAIT_MS);
+  } else {
+    console.log("[promo-recovery] no stale managed alerts found; no slot-release wait");
+  }
+
+  return deletedCount;
 }
 
 async function getCurrentWatchlistHeaderState(page) {
@@ -3216,7 +3356,6 @@ async function findVisibleAlertSubmitButton(page) {
   return null;
 }
 
-// submitAlertDialog の promo retry ブロックを以下に差し替え
 async function submitAlertDialog(page) {
   console.log("Submitting alert dialog...");
 
@@ -3235,46 +3374,50 @@ async function submitAlertDialog(page) {
   console.log("Submit button clicked! Waiting for dialog to close...");
 
   let dialogClosed = false;
-  let promoRetryCount = 0;
+  let promoRecoveryAttempted = false;
 
   for (let i = 0; i < 20; i++) {   // ← 14 → 20 に拡張
     await page.waitForTimeout(1500);
 
     if (await isWatchlistPromoDialogVisible(page)) {
-      promoRetryCount += 1;
       const promoText = await getWatchlistPromoDialogText(page);
+      const isLimitPromo = /watchlist alerts? as its limit|watchlist.*limit|アラート.*上限/i.test(promoText);
 
-      console.log(`[promo] Watchlist promo dialog detected (${promoRetryCount}/${WATCHLIST_PROMO_RETRY_MAX})`);
+      console.log(`[promo] Watchlist promo dialog detected (limit=${isLimitPromo})`);
       console.log(`[promo] ${promoText.replace(/\s+/g, " ").slice(0, 500)}`);
 
-      await safeScreenshot(page, `watchlist_promo_detected_${promoRetryCount}`);
+      const screenshotIndex = promoRecoveryAttempted ? 2 : 1;
+      await safeScreenshot(page, `watchlist_promo_detected_${screenshotIndex}`);
 
       const closed = await closeWatchlistPromoDialog(page);
       if (!closed) {
-        await safeScreenshot(page, `watchlist_promo_close_failed_${promoRetryCount}`);
+        await safeScreenshot(page, `watchlist_promo_close_failed_${screenshotIndex}`);
         throw new Error("watchlist alert の案内モーダルを閉じられませんでした");
       }
 
-      if (promoRetryCount >= WATCHLIST_PROMO_RETRY_MAX) {
-        throw new Error(
-          `watchlist alert の案内モーダルが ${promoRetryCount} 回連続で表示されました。枠解放の遅延またはTV側制限の可能性があります`
-        );
+      if (isLimitPromo) {
+        if (promoRecoveryAttempted) {
+          throw new Error(
+            "watchlist alert の上限モーダルが回復処理後も表示されました。既存管理対象アラートが見つからないか、TradingView側の使用数反映が完了していません"
+          );
+        }
+        promoRecoveryAttempted = true;
+        const deletedCount = await recoverManagedAlertSlot(page);
+        console.log(`[promo-recovery] rescan complete; deleted=${deletedCount}; retrying Create once`);
+      } else {
+        console.log("[promo] non-limit promo detected; retrying Create once after a short wait");
+        await page.waitForTimeout(2000);
       }
-
-      // ★ 変更点: スロット解放待機を指数バックオフに
-      const waitMs = WATCHLIST_PROMO_RETRY_WAIT_MS * promoRetryCount;
-      console.log(`[promo] waiting ${waitMs}ms before retrying Create (backoff x${promoRetryCount})`);
-      await page.waitForTimeout(waitMs);
 
       targetBtn = await findVisibleAlertSubmitButton(page);
       if (!targetBtn) {
-        await safeScreenshot(page, `alert_submit_button_missing_after_promo_${promoRetryCount}`);
+        await safeScreenshot(page, `alert_submit_button_missing_after_promo_${screenshotIndex}`);
         throw new Error("案内モーダルを閉じた後、アラート作成ボタンが見つかりませんでした");
       }
 
       clicked = await clickBestEffort(targetBtn, 8000);
       if (!clicked) {
-        await safeScreenshot(page, `alert_submit_retry_click_failed_${promoRetryCount}`);
+        await safeScreenshot(page, `alert_submit_retry_click_failed_${screenshotIndex}`);
         throw new Error("案内モーダル後のCreate再クリックに失敗しました");
       }
 
