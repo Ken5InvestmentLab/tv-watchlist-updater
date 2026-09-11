@@ -33,6 +33,7 @@ const TRADINGVIEW_CDP_URL = (process.env.TRADINGVIEW_CDP_URL || "").trim();
 
 const NAV_TIMEOUT = 90000;
 const STEP_TIMEOUT = 45000;
+const NETWORK_IDLE_TIMEOUT_MS = Number(process.env.NETWORK_IDLE_TIMEOUT_MS || 12000);
 
 const ALERT_SLOT_RELEASE_WAIT_MS = Number(process.env.ALERT_SLOT_RELEASE_WAIT_MS || 30000);
 const TRADINGVIEW_WATCHLIST_SYMBOL_LIMIT = Number(process.env.TRADINGVIEW_WATCHLIST_SYMBOL_LIMIT || 500);
@@ -108,6 +109,34 @@ async function createPageWithTimeout(context, label) {
       }
     );
   });
+}
+
+async function waitForNetworkIdleBestEffort(page, label) {
+  try {
+    await page.waitForLoadState("networkidle", { timeout: NETWORK_IDLE_TIMEOUT_MS });
+  } catch (error) {
+    console.warn(
+      `[navigation] networkidle wait skipped for ${label} after ${NETWORK_IDLE_TIMEOUT_MS}ms: ${error.message}`
+    );
+  }
+}
+
+async function markOwnedPage(page, marker, label) {
+  const marked = await evaluateWithTimeout(
+    page,
+    (pageMarker) => {
+      window.name = pageMarker;
+      return window.name === pageMarker;
+    },
+    marker,
+    UPDATER_TAB_SCAN_TIMEOUT_MS
+  );
+
+  if (marked === true) {
+    console.log(`[cdp] marked ${label}-owned tab after navigation`);
+  } else {
+    console.warn(`[cdp] could not persist the ${label}-owned marker after navigation`);
+  }
 }
 
 async function getOrCreateUpdaterPage(
@@ -1559,7 +1588,7 @@ async function openTradingViewLoginForm(page, force = false) {
 
   if (force || !(await waitForFirstVisibleLocator(tradingViewUsernameInputs(page), 1500))) {
     await page.goto("https://www.tradingview.com/#signin", { waitUntil: "domcontentloaded" });
-    await page.waitForLoadState("networkidle").catch(() => { });
+    await waitForNetworkIdleBestEffort(page, "TradingView sign-in");
     await page.waitForTimeout(1500);
   }
 
@@ -1664,8 +1693,9 @@ async function loginToTradingView(page, reason = "login required", options = {})
   }
 
   await page.goto("https://www.tradingview.com/chart/", { waitUntil: "domcontentloaded" });
-  await page.waitForLoadState("networkidle").catch(() => { });
+  await waitForNetworkIdleBestEffort(page, "TradingView chart after login");
   await waitForTradingViewReady(page);
+  await markOwnedPage(page, UPDATER_TAB_MARKER, "updater");
   tradingViewLoginRefreshAttempted = true;
   console.log("[login] TradingView login completed.");
 }
@@ -1868,7 +1898,7 @@ async function openAlertsPanel(page) {
     if (attempt === 2) {
       console.log("alerts panel still not opening. refreshing page once...");
       await page.reload({ waitUntil: "domcontentloaded" });
-      await page.waitForLoadState("networkidle").catch(() => { });
+      await waitForNetworkIdleBestEffort(page, "Alerts panel retry");
       await page.waitForTimeout(4000);
     } else {
       await page.waitForTimeout(1000);
@@ -2216,11 +2246,16 @@ async function clickAlertDeleteFallback(page, row) {
   return true;
 }
 
-async function refreshAlertsPanelForVerification(page) {
+async function refreshAlertsPanelForVerification(
+  page,
+  marker = UPDATER_TAB_MARKER,
+  label = "updater"
+) {
   console.log("[alert-delete] count unchanged; refreshing TradingView Alerts panel once");
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.waitForLoadState("networkidle").catch(() => { });
+  await waitForNetworkIdleBestEffort(page, "Alerts verification refresh");
   await waitForTradingViewReady(page);
+  await markOwnedPage(page, marker, label);
   await ensureAlertsPanelOpen(page);
   console.log("[alert-delete] Alerts panel refresh completed");
 }
@@ -2309,7 +2344,11 @@ async function deleteManagedAlerts(page, prefixes, options = {}) {
 
     if (!result.success) {
       try {
-        await refreshAlertsPanelForVerification(page);
+        await refreshAlertsPanelForVerification(
+          page,
+          options.pageMarker || UPDATER_TAB_MARKER,
+          options.pageLabel || "updater"
+        );
         const refreshedAlerts = await getManagedAlertTickerTexts(page, prefixes, { excludeTexts });
         const refreshedAfterCount = countAlertText(refreshedAlerts, targetText);
         console.log(
@@ -2727,11 +2766,16 @@ async function recoverManagedAlertSlot(page) {
   try {
     console.log("[promo-recovery] opening an updater-owned page to rescan active alerts");
     await recoveryPage.goto(page.url(), { waitUntil: "domcontentloaded" });
-    await recoveryPage.waitForLoadState("networkidle").catch(() => { });
+    await waitForNetworkIdleBestEffort(recoveryPage, "alert recovery");
     await waitForTradingViewReady(recoveryPage);
+    await markOwnedPage(recoveryPage, UPDATER_RECOVERY_TAB_MARKER, "alert-recovery");
     await logAlertsDebugState(recoveryPage, "promo-recovery-before");
 
-    deletedCount = await deleteManagedAlerts(recoveryPage, prefixes, { excludeTexts });
+    deletedCount = await deleteManagedAlerts(recoveryPage, prefixes, {
+      excludeTexts,
+      pageMarker: UPDATER_RECOVERY_TAB_MARKER,
+      pageLabel: "alert-recovery",
+    });
     await assertNoManagedAlertsRemain(recoveryPage, prefixes, { excludeTexts });
 
     const remaining = await getManagedAlertTickerTexts(recoveryPage, prefixes, { excludeTexts });
@@ -4097,8 +4141,9 @@ async function dumpAlertTickerTexts(page) {
 
     console.log("Opening TradingView...");
     await page.goto("https://www.tradingview.com/chart/", { waitUntil: "domcontentloaded" });
-    await page.waitForLoadState("networkidle").catch(() => { });
+    await waitForNetworkIdleBestEffort(page, "TradingView startup");
     await waitForTradingViewReady(page);  // 新しい関数を使用
+    await markOwnedPage(page, UPDATER_TAB_MARKER, "updater");
 
     // A different device can invalidate the TradingView session while this
     // The local Edge remains open. Reclaim the TradingView session before any mutation.
