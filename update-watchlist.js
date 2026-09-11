@@ -1121,6 +1121,58 @@ async function confirmTradingViewDialog(page) {
   await page.waitForTimeout(1000);
 }
 
+async function confirmTradingViewAlertDeletionDialog(page) {
+  console.log("[dialog] アラート削除確認ダイアログを待機中...");
+
+  let dialog = null;
+  for (let i = 0; i < 10; i++) {
+    const candidates = [
+      page.locator('[data-name="confirm-dialog"]'),
+      page.locator('[data-qa-id="ui-lib-PopupDialog"]'),
+      page.locator('[class*="dialog"]'),
+    ];
+
+    for (const candidate of candidates) {
+      const count = Math.min(await candidate.count().catch(() => 0), 10);
+      for (let j = 0; j < count; j++) {
+        const current = candidate.nth(j);
+        if (!(await current.isVisible().catch(() => false))) continue;
+        const text = ((await current.textContent().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+        if (/Delete watchlist alert|watchlist.*alert|アラート.*削除|alert.*delete/i.test(text)) {
+          dialog = current;
+          break;
+        }
+      }
+      if (dialog) break;
+    }
+    if (dialog) break;
+    await page.waitForTimeout(500);
+  }
+
+  if (!dialog) {
+    console.log("[dialog] アラート削除確認ダイアログが見つかりませんでした");
+    return false;
+  }
+
+  const confirmSelectors = [
+    dialog.locator('button[data-qa-id="yes-btn"]'),
+    dialog.locator('button[name="yes"]'),
+    dialog.getByRole("button", { name: /^Delete$|^削除$/i }),
+  ];
+
+  for (const candidate of confirmSelectors) {
+    const button = candidate.first();
+    if (!(await button.isVisible().catch(() => false))) continue;
+    await button.click({ force: true });
+    console.log("[dialog] アラート削除を承認しました。");
+    await dialog.waitFor({ state: "hidden", timeout: 5000 }).catch(() => { });
+    return true;
+  }
+
+  console.warn("[dialog] アラート削除確認ボタンが見つかりませんでした");
+  return false;
+}
+
 // ==============================
 // Import watchlist
 // ==============================
@@ -2022,7 +2074,7 @@ async function clickAlertDeleteFallback(page, row) {
     if (await safeClick(menuItem, { timeout: 4000, force: true })) {
       console.log("✅ 右クリックメニューから削除しました (Playwright)");
       await page.waitForTimeout(400);
-      await confirmTradingViewDialog(page).catch(() => {});
+      await confirmTradingViewAlertDeletionDialog(page).catch(() => {});
       return true;
     }
   }
@@ -2043,7 +2095,7 @@ async function clickAlertDeleteFallback(page, row) {
   if (domMenuDeleted) {
     console.log("✅ 右クリックメニューから削除しました (DOM fallback)");
     await page.waitForTimeout(400);
-    await confirmTradingViewDialog(page).catch(() => {});
+    await confirmTradingViewAlertDeletionDialog(page).catch(() => {});
     return true;
   }
 
@@ -2051,8 +2103,17 @@ async function clickAlertDeleteFallback(page, row) {
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2).catch(() => {});
   await page.keyboard.press("Delete").catch(() => {});
   await page.waitForTimeout(400);
-  await confirmTradingViewDialog(page).catch(() => {});
+  await confirmTradingViewAlertDeletionDialog(page).catch(() => {});
   return true;
+}
+
+async function refreshAlertsPanelForVerification(page) {
+  console.log("[alert-delete] count unchanged; refreshing TradingView Alerts panel once");
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForLoadState("networkidle").catch(() => { });
+  await waitForTradingViewReady(page);
+  await ensureAlertsPanelOpen(page);
+  console.log("[alert-delete] Alerts panel refresh completed");
 }
 
 async function waitForAlertDeletionProgress(page, prefixes, targetText, beforeCount, row, rowHandle, timeoutMs, options = {}) {
@@ -2113,8 +2174,8 @@ async function deleteManagedAlerts(page, prefixes, options = {}) {
       await page.waitForTimeout(ALERT_DELETE_POLL_MS);
       continue;
     }
-    const actionRow = await getAlertActionRow(targetRow);
-    const targetRowHandle = await actionRow.elementHandle().catch(() => null);
+    let actionRow = await getAlertActionRow(targetRow);
+    let targetRowHandle = await actionRow.elementHandle().catch(() => null);
 
     let clicked = await clickAlertDeleteButton(page, actionRow);
     if (!clicked) {
@@ -2123,7 +2184,7 @@ async function deleteManagedAlerts(page, prefixes, options = {}) {
     }
     if (clicked) {
       await page.waitForTimeout(500);
-      await confirmTradingViewDialog(page).catch(() => {});
+      await confirmTradingViewAlertDeletionDialog(page).catch(() => {});
     }
 
     let result = await waitForAlertDeletionProgress(
@@ -2136,6 +2197,38 @@ async function deleteManagedAlerts(page, prefixes, options = {}) {
       clicked ? ALERT_DELETE_PRIMARY_VERIFY_MS : 0,
       { excludeTexts }
     );
+
+    if (!result.success) {
+      try {
+        await refreshAlertsPanelForVerification(page);
+        const refreshedAlerts = await getManagedAlertTickerTexts(page, prefixes, { excludeTexts });
+        const refreshedAfterCount = countAlertText(refreshedAlerts, targetText);
+        console.log(
+          `[alert-delete] refreshed verification target: ${targetText} beforeCount: ${beforeCount} afterCount: ${refreshedAfterCount}`
+        );
+        if (hasAlertDeletionProgress(beforeCount, refreshedAfterCount)) {
+          result = { success: true, afterCount: refreshedAfterCount, rowAttached: false };
+        } else {
+          const refreshedRows = await getVisibleAlertRows(page);
+          let refreshedTargetRow = null;
+          for (const candidate of refreshedRows) {
+            if ((await getAlertTickerFromRow(candidate)) === targetText) {
+              refreshedTargetRow = candidate;
+              break;
+            }
+          }
+          if (refreshedTargetRow) {
+            actionRow = await getAlertActionRow(refreshedTargetRow);
+            targetRowHandle = await actionRow.elementHandle().catch(() => null);
+            result = { ...result, afterCount: refreshedAfterCount, rowAttached: true };
+          } else {
+            result = { ...result, afterCount: refreshedAfterCount, rowAttached: false };
+          }
+        }
+      } catch (refreshError) {
+        console.warn(`[alert-delete] Alerts panel refresh failed: ${refreshError.message}`);
+      }
+    }
 
     if (!result.success) {
       const remainingVerifyMs = ALERT_DELETE_TOTAL_VERIFY_MS - Math.min(
