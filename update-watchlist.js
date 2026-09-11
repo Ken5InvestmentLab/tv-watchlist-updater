@@ -40,6 +40,8 @@ const TRADINGVIEW_SESSION_RECONNECT_MAX = Number(process.env.TRADINGVIEW_SESSION
 const ALERT_DELETE_PRIMARY_VERIFY_MS = Number(process.env.ALERT_DELETE_PRIMARY_VERIFY_MS || 4000);
 const ALERT_DELETE_TOTAL_VERIFY_MS = Number(process.env.ALERT_DELETE_TOTAL_VERIFY_MS || 15000);
 const ALERT_DELETE_POLL_MS = Number(process.env.ALERT_DELETE_POLL_MS || 750);
+const UPDATER_TAB_MARKER = "tv-watchlist-updater-owned";
+const UPDATER_TAB_CLOSE_TIMEOUT_MS = Number(process.env.UPDATER_TAB_CLOSE_TIMEOUT_MS || 5000);
 
 const WORKDIR = path.resolve(process.cwd(), "tmp");
 const OUT1 = path.join(WORKDIR, "wl1.txt");
@@ -67,6 +69,47 @@ function validateLocalCdpUrl(value) {
   }
 
   return url.toString().replace(/\/$/, "");
+}
+
+async function getOrCreateUpdaterPage(context) {
+  const pages = context.pages();
+  for (const candidate of [...pages].reverse()) {
+    const owned = await candidate
+      .evaluate((marker) => window.name === marker, UPDATER_TAB_MARKER)
+      .catch(() => false);
+    if (!owned) continue;
+
+    console.log("[cdp] reusing the existing updater-owned tab");
+    return candidate;
+  }
+
+  const page = await context.newPage();
+  await page.evaluate((marker) => {
+    window.name = marker;
+  }, UPDATER_TAB_MARKER).catch(() => { });
+  console.log("[cdp] created one updater-owned tab");
+  return page;
+}
+
+async function releaseUpdaterPage(page, browser, usesLocalEdge) {
+  if (!usesLocalEdge) {
+    if (browser) await browser.close().catch(() => { });
+    return;
+  }
+
+  if (page) {
+    const closePromise = page.close().catch(() => { });
+    await Promise.race([
+      closePromise,
+      new Promise((resolve) => setTimeout(resolve, UPDATER_TAB_CLOSE_TIMEOUT_MS)),
+    ]);
+  }
+
+  try {
+    if (typeof browser?.disconnect === "function") browser.disconnect();
+  } catch (error) {
+    console.warn(`[cdp] disconnect failed: ${error.message}`);
+  }
 }
 
 // ==============================
@@ -3951,8 +3994,9 @@ async function dumpAlertTickerTexts(page) {
       if (!context) {
         throw new Error("Local Edge has no browser context. Start the normal TradingView Edge profile first.");
       }
-      // Always use an updater-owned tab. Do not navigate or close a tab that the user is using.
-      page = await context.newPage();
+      // Reuse the updater-owned tab when a previous run was interrupted.
+      // Never navigate or close a tab that belongs to the user.
+      page = await getOrCreateUpdaterPage(context);
     } else {
       console.log("Launching Playwright...");
       browser = await chromium.launch({
@@ -4078,27 +4122,15 @@ async function dumpAlertTickerTexts(page) {
 
     console.log("DONE.");
     await safeScreenshot(page, "done");
-    if (usesLocalEdge) {
-      // Keep the user's normal Edge window and tabs intact. Only close the
-      // updater-owned tab, then release Playwright's CDP websocket so the
-      // self-hosted runner can finish the step instead of hanging after DONE.
-      await page.close().catch(() => { });
-      if (typeof browser?.disconnect === "function") browser.disconnect();
-    } else {
-      await browser.close();
-    }
+    await releaseUpdaterPage(page, browser, usesLocalEdge);
+    process.exit(0);
   } catch (err) {
     console.error("FAILED:", err?.message || err);
     if (page) {
       await debugDump(page, "final_error");
       await safeScreenshot(page, "failed");
     }
-    if (usesLocalEdge) {
-      await page?.close().catch(() => { });
-      if (typeof browser?.disconnect === "function") browser.disconnect();
-    } else if (browser) {
-      await browser.close().catch(() => { });
-    }
+    await releaseUpdaterPage(page, browser, usesLocalEdge);
     process.exit(1);
   }
 })();
