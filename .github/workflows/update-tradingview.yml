@@ -57,7 +57,7 @@ jobs:
 
       - name: Notify Discord on Success
         if: success()
-        shell: pwsh
+        shell: powershell
         env:
           DISCORD_WEBHOOK_1: ${{ secrets.DISCORD_WEBHOOK_1 }}
           DISCORD_WEBHOOK_2: ${{ secrets.DISCORD_WEBHOOK_2 }}
@@ -70,7 +70,7 @@ jobs:
 
       - name: Notify Discord on Failure
         if: failure()
-        shell: pwsh
+        shell: powershell
         env:
           DISCORD_WEBHOOK_1: ${{ secrets.DISCORD_WEBHOOK_1 }}
           DISCORD_WEBHOOK_2: ${{ secrets.DISCORD_WEBHOOK_2 }}

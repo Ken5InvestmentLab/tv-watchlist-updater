@@ -20,7 +20,18 @@ function Install-StartupLauncher {
 @echo off
 powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedCommand
 "@ | Set-Content -LiteralPath $launcherPath -Encoding ascii
-  Write-Warning "Task Scheduler access was denied. Installed the per-user Startup launcher instead: $launcherPath"
+  Write-Output "Installed the per-user Startup launcher: $launcherPath"
+}
+
+function Install-RunnerDailyTask {
+  $startScript = Join-Path $PSScriptRoot "start-local-runner.ps1"
+  $taskAction = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$startScript`""
+  & schtasks.exe /Create /TN $taskName /SC DAILY /ST "09:05" /TR $taskAction /F | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Could not register the 09:05 runner check task. The per-user Startup launcher remains available."
+    return
+  }
+  Write-Output "Registered daily runner check at 09:05: $taskName"
 }
 
 function Install-EdgeCheckTask {
@@ -60,19 +71,10 @@ if (-not (Test-Path -LiteralPath (Join-Path $runnerRoot "run.cmd"))) {
   }
 }
 
-$startScript = Join-Path $PSScriptRoot "start-local-runner.ps1"
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$startScript`""
-$logonTrigger = New-ScheduledTaskTrigger -AtLogOn
-$dailyTrigger = New-ScheduledTaskTrigger -Daily -At "09:05"
-$triggers = @($logonTrigger, $dailyTrigger)
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -ExecutionTimeLimit (New-TimeSpan -Hours 1)
-try {
-  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Settings $settings -Description "Starts Microsoft Edge and the GitHub Actions runner for TradingView watchlist updates." -Force | Out-Null
-} catch {
-  Install-StartupLauncher
-}
-
+Install-StartupLauncher
+Install-RunnerDailyTask
 Install-EdgeCheckTask
 
+$startScript = Join-Path $PSScriptRoot "start-local-runner.ps1"
 & $startScript
-Write-Output "Local TradingView runner is installed and will start automatically at logon."
+Write-Output "Local TradingView runner is installed for logon startup and a daily 09:05 readiness check."
