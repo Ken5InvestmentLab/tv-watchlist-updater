@@ -57,26 +57,17 @@ jobs:
 
       - name: Notify Discord on Success
         if: success()
-        shell: powershell
+        shell: cmd
         env:
           DISCORD_WEBHOOK_1: ${{ secrets.DISCORD_WEBHOOK_1 }}
           DISCORD_WEBHOOK_2: ${{ secrets.DISCORD_WEBHOOK_2 }}
-        run: |
-          $payload = @{ username = "System Log"; content = "🟢 **[System] Browser Automation Success**"; embeds = @(@{ title = "Update Completed"; description = "TradingViewのウォッチリストとアラートの更新がすべて完了しました！"; color = 65280 }) } | ConvertTo-Json -Depth 4 -Compress
-          foreach ($item in @(@{ Name = "DISCORD_WEBHOOK_1"; Url = $env:DISCORD_WEBHOOK_1 }, @{ Name = "DISCORD_WEBHOOK_2"; Url = $env:DISCORD_WEBHOOK_2 })) {
-            if ([string]::IsNullOrWhiteSpace($item.Url)) { Write-Warning "$($item.Name) is empty. Skip."; continue }
-            try { Invoke-RestMethod -Method Post -Uri $item.Url -ContentType "application/json" -Body $payload | Out-Null } catch { Write-Warning "Failed to send Discord notification: $($item.Name)" }
-          }
+        run: node scripts/notify-discord.js success
 
       - name: Notify Discord on Failure
         if: failure()
-        shell: powershell
+        shell: cmd
         env:
           DISCORD_WEBHOOK_1: ${{ secrets.DISCORD_WEBHOOK_1 }}
           DISCORD_WEBHOOK_2: ${{ secrets.DISCORD_WEBHOOK_2 }}
-        run: |
-          $payload = @{ username = "System Log"; content = "🔴 **[System] Browser Automation Error**"; embeds = @(@{ title = "Playwright Error Log"; url = "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"; description = "TradingViewの操作中にエラーが発生しました。UI変更の可能性があります。"; color = 16711680 }) } | ConvertTo-Json -Depth 4 -Compress
-          foreach ($item in @(@{ Name = "DISCORD_WEBHOOK_1"; Url = $env:DISCORD_WEBHOOK_1 }, @{ Name = "DISCORD_WEBHOOK_2"; Url = $env:DISCORD_WEBHOOK_2 })) {
-            if ([string]::IsNullOrWhiteSpace($item.Url)) { Write-Warning "$($item.Name) is empty. Skip."; continue }
-            try { Invoke-RestMethod -Method Post -Uri $item.Url -ContentType "application/json" -Body $payload | Out-Null } catch { Write-Warning "Failed to send Discord notification: $($item.Name)" }
-          }
+          GITHUB_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/notify-discord.js failure

@@ -9,17 +9,20 @@ function readRepoFile(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
 }
 
-test("Discord notification steps use Windows PowerShell available to the startup runner", () => {
+test("Discord notification steps use the Node helper through an ASCII cmd wrapper", () => {
   const workflow = readRepoFile(".github/workflows/update-tradingview.yml");
   const notificationSections = workflow.match(
     /- name: Notify Discord on (?:Success|Failure)[\s\S]*?(?=\n      - name:|$)/g,
   );
 
   assert.equal(notificationSections?.length, 2);
-  for (const section of notificationSections) {
-    assert.match(section, /\n        shell: powershell\n/);
-    assert.doesNotMatch(section, /\n        shell: pwsh\n/);
-  }
+  assert.match(notificationSections[0], /\n        shell: cmd\n/);
+  assert.match(notificationSections[0], /run: node scripts\/notify-discord\.js success/);
+  assert.match(notificationSections[1], /\n        shell: cmd\n/);
+  assert.match(notificationSections[1], /run: node scripts\/notify-discord\.js failure/);
+
+  const combined = notificationSections.join("\n");
+  assert.doesNotMatch(combined, /Invoke-RestMethod|ConvertTo-Json|shell: pwsh|shell: powershell/);
 });
 
 test("runner setup keeps logon startup and installs the daily readiness task", () => {
