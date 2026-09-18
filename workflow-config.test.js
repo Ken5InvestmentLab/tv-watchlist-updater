@@ -16,9 +16,9 @@ test("Discord notification steps use the Node helper through an ASCII cmd wrappe
   );
 
   assert.equal(notificationSections?.length, 2);
-  assert.match(notificationSections[0], /\n        shell: cmd\n/);
+  assert.match(notificationSections[0], /\r?\n        shell: cmd\r?\n/);
   assert.match(notificationSections[0], /run: node scripts\/notify-discord\.js success/);
-  assert.match(notificationSections[1], /\n        shell: cmd\n/);
+  assert.match(notificationSections[1], /\r?\n        shell: cmd\r?\n/);
   assert.match(notificationSections[1], /run: node scripts\/notify-discord\.js failure/);
 
   const combined = notificationSections.join("\n");
