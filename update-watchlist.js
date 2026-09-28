@@ -3,6 +3,7 @@ const path = require("path");
 const { chromium } = require("playwright");
 const { validateAlertWebhookUrl, configureAlertWebhook } = require("./alert-webhook");
 const { countAlertText, hasAlertDeletionProgress, isExcludedAlertText } = require("./alert-delete-logic");
+const { parseStorageState, seedCdpContextFromStorageState } = require("./storage-state");
 
 // ==============================
 // ENV
@@ -4062,6 +4063,7 @@ async function dumpAlertTickerTexts(page) {
   let deletedAlertsThisRun = false;
   const localCdpUrl = validateLocalCdpUrl(TRADINGVIEW_CDP_URL);
   const usesLocalEdge = Boolean(localCdpUrl);
+  let storageState = null;
 
   try {
     if (!usesLocalEdge && !TRADINGVIEW_STORAGE_STATE && !(TRADINGVIEW_USERNAME && TRADINGVIEW_PASSWORD)) {
@@ -4071,6 +4073,15 @@ async function dumpAlertTickerTexts(page) {
     }
     reqEnv("WATCHLIST_1_URL", WATCHLIST_1_URL);
     if (DO_CREATE_WATCHLIST_ALERT) validateAlertWebhookUrl(ALERT_WEBHOOK_URL);
+
+    if (TRADINGVIEW_STORAGE_STATE) {
+      try {
+        storageState = parseStorageState(TRADINGVIEW_STORAGE_STATE);
+      } catch (err) {
+        if (!(TRADINGVIEW_USERNAME && TRADINGVIEW_PASSWORD)) throw err;
+        console.warn(`[login] TRADINGVIEW_STORAGE_STATE parse failed; trying credential login instead: ${err.message}`);
+      }
+    }
 
     ensureDir(WORKDIR);
 
@@ -4106,11 +4117,17 @@ async function dumpAlertTickerTexts(page) {
       browser = await chromium.connectOverCDP(localCdpUrl);
       context = browser.contexts()[0];
       if (!context) {
-        throw new Error("Local Edge has no browser context. Start the normal TradingView Edge profile first.");
+        throw new Error("Local Edge has no browser context. Start the dedicated TradingView Edge profile first.");
       }
       // Reuse the updater-owned tab when a previous run was interrupted.
       // Never navigate or close a tab that belongs to the user.
       page = await getOrCreateUpdaterPage(context);
+      const seedResult = await seedCdpContextFromStorageState(context, page, storageState);
+      if (seedResult.seeded) {
+        console.log(
+          `[login] Seeded the dedicated Edge profile with ${seedResult.cookieCount} cookies and ${seedResult.originCount} local-storage origin(s).`,
+        );
+      }
     } else {
       console.log("Launching Playwright...");
       browser = await chromium.launch({
@@ -4118,17 +4135,6 @@ async function dumpAlertTickerTexts(page) {
         args: ["--no-sandbox", "--disable-dev-shm-usage"],
       });
 
-      let storageState = null;
-      if (TRADINGVIEW_STORAGE_STATE) {
-        try {
-          storageState = JSON.parse(TRADINGVIEW_STORAGE_STATE);
-        } catch (err) {
-          if (!(TRADINGVIEW_USERNAME && TRADINGVIEW_PASSWORD)) {
-            throw err;
-          }
-          console.warn(`[login] TRADINGVIEW_STORAGE_STATE parse failed; trying credential login instead: ${err.message}`);
-        }
-      }
       context = await browser.newContext({
         ...(storageState ? { storageState } : {}),
         viewport: { width: 1600, height: 1200 },

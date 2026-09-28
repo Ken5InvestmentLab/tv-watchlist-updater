@@ -49,22 +49,27 @@ If TradingView asks for 2FA/CAPTCHA, run `node save-storage-state.js` locally an
 ## Local Edge execution
 
 The daily updater runs on this PC through a self-hosted GitHub Actions runner. It
-connects to your normal Microsoft Edge `Default` profile at `127.0.0.1:9223`; it
-does not launch an automated Chromium browser or upload that profile to GitHub.
+connects to an updater-owned Microsoft Edge profile at `127.0.0.1:9223`; the
+profile lives under `%LOCALAPPDATA%\TVWatchlistUpdater\EdgeUserData` and is never
+uploaded to GitHub or OneDrive. The user's ordinary Edge windows stay open and
+are never attached to, navigated, or closed by the updater.
 
 Run `powershell -ExecutionPolicy Bypass -File scripts/setup-local-runner.ps1`
 once from this repository. It downloads and registers the runner, starts the
-ordinary Edge profile, and schedules both at logon and 09:05 JST. If Windows
+dedicated Edge profile, and schedules both at logon and 09:05 JST. If Windows
 does not grant task-creation access, it installs a per-user Startup launcher
-instead. Close all Edge windows once, run the launcher, and use the already
-logged-in normal Edge profile. The builder's
+instead. Current Chromium-based Edge releases reject remote debugging against
+the default browser data directory, so the launcher always uses the separate
+local profile even when ordinary Edge is already open. The builder's
 existing `build_complete` event then runs the updater locally with the same
 GitHub secrets as before.
 
-If the normal profile is not signed in but a freshly captured local
+If the dedicated profile is not signed in but a freshly captured local
 `storageState.json` is available, run `node scripts/seed-local-chrome-session.js`
-once to restore the TradingView session into the local Edge profile.
+once to restore the TradingView session into it. Scheduled runs also seed a
+missing dedicated-profile session from `TRADINGVIEW_STORAGE_STATE` without
+overwriting a live session.
 
-The updater creates its own tab and never closes the user-visible Edge
-window. If another device disconnects the TradingView session, it detects the
+The updater creates its own tab and closes only that updater-owned tab. If
+another device disconnects the TradingView session, it detects the
 `Session disconnected` dialog and clicks `Connect` up to three times.

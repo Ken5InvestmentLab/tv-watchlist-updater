@@ -21,12 +21,6 @@ if (Test-EdgeDebugEndpoint) {
   exit 0
 }
 
-$runningEdge = Get-Process msedge -ErrorAction SilentlyContinue
-if ($runningEdge) {
-  Write-Warning "Microsoft Edge is open but the TradingView debugging endpoint is unavailable. It was left untouched; close all Edge windows once and start the launcher again."
-  exit 1
-}
-
 & $launcher -DebugPort $DebugPort
 if (-not (Test-EdgeDebugEndpoint)) {
   throw "Edge was started but the TradingView debugging endpoint was not available."

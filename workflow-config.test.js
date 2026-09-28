@@ -35,3 +35,14 @@ test("runner setup keeps logon startup and installs the daily readiness task", (
   );
   assert.match(setupScript, /powershell\.exe -NoProfile -WindowStyle Hidden/);
 });
+
+test("Edge launcher uses and repairs only the updater-owned non-default profile", () => {
+  const launcher = readRepoFile("scripts/start-tradingview-chrome.ps1");
+  const edgeCheck = readRepoFile("scripts/ensure-tradingview-edge.ps1");
+
+  assert.match(launcher, /TVWatchlistUpdater\\EdgeUserData/);
+  assert.doesNotMatch(launcher, /Microsoft\\Edge\\User Data/);
+  assert.match(launcher, /CommandLine\.IndexOf\(\$profileDir/);
+  assert.match(launcher, /Stop-Process -Id \$_\.ProcessId/);
+  assert.doesNotMatch(edgeCheck, /Get-Process msedge/);
+});
